@@ -26,8 +26,9 @@ log says if it thinks to go and read the right file at the right moment.
 You can hand it the raw log instead. That works, and it is the honest baseline to
 compare against — so this project measured it. On the same bug, an agent using
 AgentVision took **74,490 tokens / 14 tool calls / 80 s** against **90,582 / 22 /
-111 s** for an agent reading the raw log directly, and the raw-log agent drew two
-conclusions that were not true while AgentVision drew none.
+111 s** for an agent reading the raw log directly. The raw-log agent reached **two
+false conclusions**; the AgentVision agent reached **zero**. Both solved the bug —
+the difference is that one of them also asserted things that were not true.
 
 Cheaper matters less than that last part. Long contexts measurably degrade — every
 frontier model loses accuracy as input grows, well before its window fills, and a
