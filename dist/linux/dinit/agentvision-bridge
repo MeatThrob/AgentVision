@@ -1,0 +1,20 @@
+# AgentVision bridge server — dinit service template (Artix-dinit).
+#
+#   1. EDIT command / working-dir / run-as below (no variables in dinit
+#      service descriptions — write the real paths).
+#   2. sudo cp agentvision-bridge /etc/dinit.d/
+#   3. sudo dinitctl enable agentvision-bridge
+#
+# NOTE: screen capture needs the desktop session env. For single-seat X11 add:
+#   env-var = DISPLAY=:0
+#   env-var = XAUTHORITY=/home/youruser/.Xauthority
+# For Wayland prefer starting the bridge from your compositor autostart
+# (see dist/linux/README.md §3).
+
+type = process
+command = /usr/bin/python3 python_backend/api/bridge_server.py --host 127.0.0.1 --port 7771 --folder /opt/agentvision/snapshots --interval 2
+working-dir = /opt/agentvision
+run-as = youruser
+restart = true
+smooth-recovery = true
+logfile = /var/log/agentvision-bridge.log

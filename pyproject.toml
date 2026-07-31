@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentvision"
+version = "5.0.0"
+description = "A local debug flight recorder for AI agents: time-aligned screenshots and parsed logs for one target program, exposed as MCP tools."
+readme = "docs/README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["debugging", "mcp", "observability", "logs", "screenshots", "ai-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+]
+
+# Kept in step with requirements.txt. `mcp` is NOT optional: without it the
+# server that exposes every av_* tool cannot import at all.
+dependencies = [
+    "flask>=3.0.0",
+    "psutil>=5.9.0",
+    "pillow>=10.0.0",
+    "requests>=2.31.0",
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+# On macOS this pulls the OS's own OCR engine (Apple Vision) as a plain wheel, so
+# on-screen text reading works with no system install. tesseract is a speed
+# optimisation only and is picked up automatically if the binary already exists.
+ocr = ["pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'", "pytesseract>=0.3.10"]
+test = ["pytest>=7.0.0", "pytest-json-report>=1.5.0"]
+
+# THE POINT OF THIS FILE, beyond metadata: the docs refer to an `agentvision`
+# command throughout (`agentvision run -- <cmd>`, `agentvision doctor`,
+# `agentvision daemon start`), and until now no such command existed — a
+# pre-publish review found the docs naming a binary that was never built, so
+# every one of those instructions failed for a new user. This declares it for
+# real. Without an install the equivalent is
+# `python3 -m python_backend.cli <subcommand>`.
+[project.scripts]
+agentvision = "python_backend.cli:main"
+
+[tool.setuptools]
+packages = [
+    "python_backend",
+    "python_backend.api",
+    "python_backend.connectors",
+    "python_backend.connectors.adapters",
+    "python_backend.daemon",
+    "python_backend.gui",
+    "python_backend.modules",
+    "python_backend.utils",
+    "agent_bootstrap",
+    "shared",
+    "shared.schema",
+]
+
+[tool.setuptools.package-data]
+"python_backend.api" = ["*.json"]
+"python_backend.connectors.adapters" = ["*.json"]
+"agent_bootstrap" = ["*.js"]

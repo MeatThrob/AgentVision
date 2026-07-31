@@ -1,0 +1,32 @@
+#!/sbin/openrc-run
+# AgentVision input daemon (evdev key/mouse recorder) — OpenRC template.
+#
+#   1. EDIT the AV_* variables below. AV_USER must be in the `input` group
+#      (sudo usermod -aG input youruser) — the daemon reads /dev/input/event*.
+#   2. sudo cp agentvision-inputd /etc/init.d/agentvision-inputd
+#      sudo chmod +x /etc/init.d/agentvision-inputd
+#   3. sudo rc-update add agentvision-inputd default
+#      sudo rc-service agentvision-inputd start
+#
+# Unlike the bridge, this daemon has NO display dependency (evdev sits below
+# X11/Wayland), so it runs cleanly from system init. Physical hardware events
+# are filtered out by default; synthetic (uinput) events are always recorded.
+
+AV_ROOT="/opt/agentvision"          # path to the AgentVision_v5 checkout
+AV_PYTHON="/usr/bin/python3"
+AV_USER="youruser"                  # must be in the `input` group
+
+name="agentvision-inputd"
+description="AgentVision system-wide input recorder (evdev)"
+command="${AV_PYTHON}"
+command_args="-m python_backend.daemon.input_daemon"
+command_user="${AV_USER}"
+command_background="yes"
+directory="${AV_ROOT}"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+depend() {
+    need localmount
+}

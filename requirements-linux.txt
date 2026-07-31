@@ -1,0 +1,58 @@
+# AgentVision — Linux dependencies (Artix / Arch and friends; any distro)
+# Install with:  python3 -m pip install -r requirements-linux.txt
+#
+# SYSTEM packages (pacman names; full notes + init-system service templates
+# in dist/linux/README.md):
+#
+#   Wayland capture : grim                      (wlroots compositors: Sway/
+#                                                Hyprland/labwc — the common
+#                                                Artix setups)
+#                     xdg-desktop-portal + a backend for your compositor
+#                     (xdg-desktop-portal-wlr / -gtk / -kde) — the portable
+#                     portal fallback; needs `gdbus` from glib2 (usually
+#                     already installed)
+#   X11 CLI capture : maim  OR  scrot  OR  imagemagick — only needed if the
+#                     python `mss` package is not installed
+#   X11 window tools: xdotool and/or wmctrl — fallbacks when python-xlib is
+#                     absent; xdotool also anchors the input daemon's
+#                     absolute pointer position
+#   Fonts           : ttf-dejavu (overlay stamp bar; /usr/share/fonts/TTF/)
+#   Tk GUI          : tk (only for the desktop GUI; the bridge is headless)
+#
+#   Input recording : /dev/input/event* must be readable — add your user to
+#                     the `input` group and re-login:
+#                         sudo usermod -aG input $USER
+#                     (The optional uinput injection self-test additionally
+#                     needs writable /dev/uinput; skipping it is fine.)
+#
+# ── Core bridge + tooling (all platforms) ──────────────────────────────
+flask>=3.0.0
+psutil>=5.9.0
+pillow>=10.0.0
+requests>=2.31.0
+pytest>=7.0.0
+pytest-json-report>=1.5.0
+
+# ── Linux-specific ─────────────────────────────────────────────────────
+mss>=9.0.0            # X11 screen/region capture (NOT used on Wayland —
+                      # grim / xdg-desktop-portal handle that)
+python-xlib>=0.33     # X11 window enumeration (EWMH) + geometry + active win
+evdev>=1.6.0          # input daemon backend (/dev/input/event*)
+
+# ── Optional: only needed if you also expose AgentVision to Claude as MCP tools
+# mcp>=1.0.0
+
+# ── Optional: on-screen text OCR (av_ocr_frame / av_read_screen) ────────
+# Reads UI text / error dialogs / stack traces from a frame WITHOUT vision
+# tokens (an error dialog as JSON ~30 tokens vs ~4800 as an image).
+#
+# Linux is the one OS with no built-in OCR engine, so there are two pip-only
+# routes and NEITHER needs a system package compiled by hand:
+#   1. tesseract, if your distro already provides it (preferred — ~4x faster):
+#        Arch/Artix:    pacman -S tesseract tesseract-data-eng
+#        Debian/Ubuntu: apt install tesseract-ocr
+pytesseract>=0.3.10
+#   2. otherwise run `agentvision install-ocr`, which pip-installs RapidOCR on
+#      onnxruntime (bundled ONNX models, no system packages). It is left out of
+#      this file only because onnxruntime is a ~50 MB download:
+# rapidocr-onnxruntime>=1.3.0

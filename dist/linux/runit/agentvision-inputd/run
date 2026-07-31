@@ -1,0 +1,21 @@
+#!/bin/sh
+# AgentVision input daemon (evdev recorder) — runit template (Artix-runit).
+#
+#   1. EDIT the AV_* variables. AV_USER must be in the `input` group
+#      (sudo usermod -aG input youruser).
+#   2. sudo cp -r agentvision-inputd /etc/runit/sv/
+#   3. sudo ln -s /etc/runit/sv/agentvision-inputd /run/runit/service/
+#
+# No display dependency (evdev sits below X11/Wayland) — runs cleanly from
+# system init. Physical hardware is filtered out by default; synthetic
+# (uinput) events are always recorded.
+
+exec 2>&1
+
+AV_ROOT="/opt/agentvision"          # path to the AgentVision_v5 checkout
+AV_PYTHON="/usr/bin/python3"
+AV_USER="youruser"                  # must be in the `input` group
+
+cd "${AV_ROOT}" || exit 1
+exec chpst -u "${AV_USER}:input" env HOME="/home/${AV_USER}" \
+    "${AV_PYTHON}" -m python_backend.daemon.input_daemon

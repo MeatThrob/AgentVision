@@ -1,0 +1,30 @@
+#!/bin/sh
+# AgentVision bridge server — runit service template (Artix-runit, Void).
+#
+#   1. EDIT the AV_* variables below.
+#   2. sudo cp -r agentvision-bridge /etc/runit/sv/
+#   3. sudo ln -s /etc/runit/sv/agentvision-bridge /run/runit/service/
+#      (Artix; on Void: /var/service/)
+#
+# NOTE: screen capture needs the desktop session env. For single-seat X11
+# uncomment the DISPLAY/XAUTHORITY lines; for Wayland prefer starting the
+# bridge from your compositor autostart (see dist/linux/README.md §3).
+
+exec 2>&1
+
+AV_ROOT="/opt/agentvision"          # path to the AgentVision_v5 checkout
+AV_PYTHON="/usr/bin/python3"
+AV_USER="youruser"                  # the desktop user
+AV_HOST="127.0.0.1"
+AV_PORT="7771"
+AV_INTERVAL="2"
+
+# Uncomment for capture from a system service on single-seat X11:
+# export DISPLAY=":0"
+# export XAUTHORITY="/home/${AV_USER}/.Xauthority"
+
+cd "${AV_ROOT}" || exit 1
+exec chpst -u "${AV_USER}" env HOME="/home/${AV_USER}" \
+    "${AV_PYTHON}" python_backend/api/bridge_server.py \
+    --host "${AV_HOST}" --port "${AV_PORT}" \
+    --folder "${AV_ROOT}/snapshots" --interval "${AV_INTERVAL}"

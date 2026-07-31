@@ -1,0 +1,75 @@
+# AgentVision — things that must never be committed.
+#
+# Written after a pre-publish sweep found a 37 MB agentvision_debug.log, a
+# bridge restart log and two profiles.json backups sitting in the tree, all
+# full of one developer's absolute paths. None of it is source; all of it
+# would have shipped.
+
+# ── Runtime output ────────────────────────────────────────────────────────────
+*.log
+agentvision_debug.log
+bridge_restart.log
+
+# Per-run state under log/. These are JSONL/JSON so `*.log` misses them, and
+# they name the profiles the developer happened to be watching.
+/log/observer/
+/log/agentvision_baselines.json
+/log/agentvision_push_mode.json
+/log/agentvision_stop_blocks.json
+
+# Captured frames, sidecars, thumbnails and archives. These are the user's
+# screen contents — never publish them, and they are large.
+snapshots/*/
+!snapshots/README.txt
+frames/
+*.webp
+*_annotated.png
+*.diff
+
+# ── Local state ───────────────────────────────────────────────────────────────
+# profiles.json holds the user's own program paths. The file ships with an empty
+# object; a working copy will fill it in and that must stay local.
+python_backend/profiles.json.bak*
+python_backend/active_profile.txt
+python_backend/connectors/adapters/user_adapters.json
+# ...and its timestamped backups. The exact-file line above missed these, so two
+# .bak copies of one developer's own adapter specs were in the shipping set.
+python_backend/connectors/adapters/user_adapters.json.bak*
+checkpoints/*/
+!checkpoints/README.txt
+
+# Bridge artifacts written INTO a target project (kept here in case AgentVision
+# is ever run against its own tree).
+#
+# ANCHORED WITH A LEADING SLASH, and that is not a style choice. Unanchored,
+# `sitecustomize.py` also matched agent_bootstrap/sitecustomize.py — the file
+# CPython auto-loads to install every in-process hook. A clean clone would have
+# shipped without the Python emitter and failed SILENTLY: no hooks, no error.
+# Caught by `git check-ignore -v` before the first commit. Same trap on
+# agentvision/, which would have matched any nested directory of that name.
+/agentvision/
+/sitecustomize.py
+/.av_bridge_plan.json
+/.av_preflight_ok
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/*.zip
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Icon?
+.idea/
+.vscode/
+*.swp
+
+# AgentVision diagnostic data (runtime, not config)
+agentvision/actions.jsonl
+agentvision/log.txt
+agentvision/crashes/
+agentvision/state.json

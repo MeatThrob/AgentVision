@@ -1,0 +1,22 @@
+{
+  "custom": {
+    "name": "custom",
+    "display_name": "Custom Program",
+    "log_file": "",
+    "stats_folder": "",
+    "screenshots_folder": "",
+    "config_folder": "",
+    "state_file": "",
+    "project_root": "",
+    "process_name": "python3",
+    "python_exe": "python3",
+    "test_dir": "",
+    "notes": "",
+    "capture_app": "",
+    "capture_crop": "",
+    "action_log_file": "",
+    "log_sources": [],
+    "language": "",
+    "capture_user_input": false
+  }
+}

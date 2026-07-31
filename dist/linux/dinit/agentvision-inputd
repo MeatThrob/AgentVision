@@ -1,0 +1,19 @@
+# AgentVision input daemon (evdev recorder) — dinit template (Artix-dinit).
+#
+#   1. EDIT command / working-dir / run-as below. The run-as user must be in
+#      the `input` group (sudo usermod -aG input youruser) — the daemon reads
+#      /dev/input/event*.
+#   2. sudo cp agentvision-inputd /etc/dinit.d/
+#   3. sudo dinitctl enable agentvision-inputd
+#
+# No display dependency (evdev sits below X11/Wayland) — runs cleanly from
+# system init. Physical hardware is filtered out by default; synthetic
+# (uinput) events are always recorded.
+
+type = process
+command = /usr/bin/python3 -m python_backend.daemon.input_daemon
+working-dir = /opt/agentvision
+run-as = youruser
+restart = true
+smooth-recovery = true
+logfile = /var/log/agentvision-inputd.log

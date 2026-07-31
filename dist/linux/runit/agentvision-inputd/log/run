@@ -1,0 +1,4 @@
+#!/bin/sh
+# runit logger for agentvision-inputd → /var/log/agentvision-inputd/
+mkdir -p /var/log/agentvision-inputd
+exec svlogd -tt /var/log/agentvision-inputd

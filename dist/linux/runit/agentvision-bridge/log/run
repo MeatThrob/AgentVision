@@ -1,0 +1,4 @@
+#!/bin/sh
+# runit logger for agentvision-bridge → /var/log/agentvision-bridge/
+mkdir -p /var/log/agentvision-bridge
+exec svlogd -tt /var/log/agentvision-bridge

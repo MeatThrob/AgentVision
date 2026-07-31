@@ -1,0 +1,40 @@
+#!/sbin/openrc-run
+# AgentVision bridge server — OpenRC service template (Artix-OpenRC, Gentoo).
+#
+#   1. EDIT the AV_* variables below.
+#   2. sudo cp agentvision-bridge /etc/init.d/agentvision-bridge
+#      sudo chmod +x /etc/init.d/agentvision-bridge
+#   3. sudo rc-update add agentvision-bridge default
+#      sudo rc-service agentvision-bridge start
+#
+# NOTE: screen capture needs the desktop session env. For a single-seat X11
+# box uncomment the DISPLAY/XAUTHORITY export below; for Wayland prefer
+# starting the bridge from your compositor's autostart instead (see
+# dist/linux/README.md §3).
+
+AV_ROOT="/opt/agentvision"          # path to the AgentVision_v5 checkout
+AV_PYTHON="/usr/bin/python3"
+AV_USER="youruser"                  # the desktop user
+AV_HOST="127.0.0.1"
+AV_PORT="7771"
+AV_INTERVAL="2"
+
+# Uncomment for capture from a system service on single-seat X11:
+# export DISPLAY=":0"
+# export XAUTHORITY="/home/${AV_USER}/.Xauthority"
+
+name="agentvision-bridge"
+description="AgentVision bridge server (headless)"
+command="${AV_PYTHON}"
+command_args="python_backend/api/bridge_server.py --host ${AV_HOST} --port ${AV_PORT} --folder ${AV_ROOT}/snapshots --interval ${AV_INTERVAL}"
+command_user="${AV_USER}"
+command_background="yes"
+directory="${AV_ROOT}"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+depend() {
+    need localmount
+    after net
+}
