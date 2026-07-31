@@ -23,18 +23,15 @@ An AI agent debugging a running program is working blind. It can read your sourc
 and it can run commands, but it cannot see the window, and it only learns what a
 log says if it thinks to go and read the right file at the right moment.
 
-You can hand it the raw log instead. That works, and it is the honest baseline to
-compare against — so this project measured it. On the same bug, an agent using
-AgentVision took **74,490 tokens / 14 tool calls / 80 s** against **90,582 / 22 /
-111 s** for an agent reading the raw log directly. The raw-log agent reached **two
-false conclusions**; the AgentVision agent reached **zero**. Both solved the bug —
-the difference is that one of them also asserted things that were not true.
+AgentVision gives it both halves at once, on one timeline: what the program
+printed, and what the screen looked like when it printed it.
 
-Cheaper matters less than that last part. Long contexts measurably degrade — every
-frontier model loses accuracy as input grows, well before its window fills, and a
-model that takes a wrong turn in a multi-turn conversation tends not to recover. A
-debug tool that occasionally invents a detail is worse than no tool, because the
-agent commits to it. So the governing rule here is:
+The hard part is not collecting that. It is handing it over without corrupting it.
+Long contexts measurably degrade — every frontier model loses accuracy as input
+grows, well before its window fills, and a model that takes a wrong turn in a
+multi-turn conversation tends not to recover. A debug tool that invents one detail
+is worse than no tool, because the agent commits to it. So the governing rule
+here is:
 
 > **AgentVision may not assert anything it did not verify.**
 
