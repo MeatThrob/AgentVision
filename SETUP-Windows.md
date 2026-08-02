@@ -75,7 +75,7 @@ npm install -g @anthropic-ai/claude-code
 The MCP bridge needs the `mcp` package (it is optional, so not in
 `requirements-windows.txt` — install it only if you use Claude Code):
 ```bat
-py -3 -m pip install mcp
+py -3 -m pip install "mcp>=2.0,<3"
 ```
 
 Register the MCP server with Claude Code. `claude_mcp.py` imports only the

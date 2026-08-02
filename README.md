@@ -35,7 +35,7 @@ here is:
 
 > **AgentVision may not assert anything it did not verify.**
 
-That rule is not aspirational. It is enforced in code and in 54 test suites, most
+That rule is not aspirational. It is enforced in code and in 57 test suites, most
 of which exist because a specific version of this tool once said "healthy" while
 the program was failing.
 
@@ -58,6 +58,11 @@ the program was failing.
   looking.
 - **Truncation is always reported.** A scan that did not finish says so, because
   "signal absent" and "file never opened" must not look the same.
+- **A default is never dressed up as a decision.** Some choices are the user's —
+  the frame rate, consent to record their keystrokes — so AgentVision asks them
+  directly where the MCP client supports it. Where it cannot ask, it uses its
+  documented fallback and labels it as one: only `how: "asked"` means a human
+  chose.
 
 ## The part that surprises people
 
@@ -104,6 +109,23 @@ built, and your exact next call. Then read
 contract is written for you, including what to do when the active profile is not
 the program you were asked about.
 
+Alongside the 90 tools there are 12 `agentvision://` resource URIs, so heavy
+artifacts — the ~200 KB catalog, a single frame, one frozen incident — can be
+addressed rather than pasted into your context.
+
+## Other MCP clients
+
+Everything works anywhere MCP does. Two things vary by client, and
+`av_start_here()` reports both under `your_client` rather than leaving you to
+find out by having something quietly not happen:
+
+- **Asking the user.** Where the client supports elicitation, AgentVision puts
+  the question to them itself. Where it does not, it says so.
+- **Being told without asking.** [Push mode](docs/PUSH_MODE.md) is a Claude Code
+  hook. Other clients get the same state through resource-updated notifications
+  — same silence-by-default rules, and it stands down when the hook is already
+  doing the job.
+
 ## Documentation
 
 | | |
@@ -124,7 +146,7 @@ the program you were asked about.
 python3 run_all_tests.py
 ```
 
-54 suites. They are worth reading as documentation of real failures: each one
+57 suites. They are worth reading as documentation of real failures: each one
 tends to encode a specific way this tool once misled its caller.
 
 One of them, `bridge_gate`, tests the first-connection contract and so needs a

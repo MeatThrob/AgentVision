@@ -408,6 +408,52 @@ rendering corruption and progress indicators are invisible in text, and refusing
 to look is its own failure. Just never *start* at tier 4.
 `av_token_report()` shows what the discipline actually saved.
 
+### Tier 0 — resources, for things you may not need in the transcript
+
+A tool result lands in your context whether or not you needed all of it. A
+**resource** is a URI your client fetches only when something actually wants it.
+Same data, same endpoints:
+
+| URI | Instead of |
+|---|---|
+| `agentvision://catalog` | `av_bridge_catalog()` — ~200 KB, same `catalog_token` |
+| `agentvision://digest` | `av_digest()` |
+| `agentvision://frame/{seq}.json` | `av_frame_json(seq)` |
+| `agentvision://frame/{seq}/region` | `av_frame_region(seq)` |
+| `agentvision://incident/{id}` | `av_incidents(id=...)` |
+| `agentvision://log/raw{?from_offset}` | `av_log_raw()` — the resource **peeks**, so it never moves your read position |
+
+Reach for these when you want the artifact addressable rather than pasted.
+
+---
+
+## 7a. WHEN AGENTVISION CAN ASK THE USER, AND WHEN IT CANNOT
+
+Some decisions are the user's: how many screenshots per second, and whether to
+record their keystrokes. Where the MCP client supports it, AgentVision puts the
+question to them directly — call `av_capture_start()` with **no** interval and
+it asks.
+
+Where the client cannot show a prompt, it falls back **and says so**. Every such
+response carries a block with a `how` field:
+
+```json
+"capture_rate_choice": {
+  "value": 1.0, "how": "unsupported", "chosen_by_user": false,
+  "note": "capture rate: 1 shot(s)/sec (1s between shots) — AgentVision could
+           not ask you, so this is its default, NOT your choice."
+}
+```
+
+**Only `how: "asked"` means a human chose.** The other values —
+`declined`, `cancelled`, `unsupported`, `no_context`, `failed` — all mean
+AgentVision picked. If you see one of those, ask the user in prose yourself, and
+never report the value back as though they had chosen it.
+
+`av_start_here()` and `av_capabilities()` both return `your_client`, which tells
+you up front whether asking is available in this client, and what AgentVision
+does instead when it is not.
+
 ---
 
 ## 8. MISTAKES MODELS MAKE

@@ -878,6 +878,12 @@ def catalog(profile, language: str = "", *, tool_groups: Optional[dict] = None,
         "code_evidence": evidence,
         "capture_settings": {
             "interval_seconds": "0.1 - 10; ASK THE USER, do not assume",
+            "how_to_ask": ("call av_capture_start() with NO interval and "
+                           "AgentVision puts the question to the user itself "
+                           "(MCP elicitation) and uses their answer. Where the "
+                           "client cannot show a prompt it falls back and says "
+                           "so in `capture_rate_choice` — read that field "
+                           "before telling the user what rate you are running."),
             "note": ("frame rate is a cost lever, not a detail: 10 fps on a "
                      "static UI is waste, 1 fps on an animation misses the bug"),
         },
@@ -985,7 +991,9 @@ def catalog(profile, language: str = "", *, tool_groups: Optional[dict] = None,
             "rationale": "<one line: what this program IS and what its real "
                          "failure mode is>",
             "visual_capture": "<true if code_evidence has gui_toolkit, else false>",
-            "capture": {"interval_seconds": "<ASK THE USER; 0.1-10>"},
+            "capture": {"interval_seconds":
+                        "<ASK THE USER; 0.1-10 — or omit and let "
+                        "av_capture_start() ask them for you>"},
             # Keyed by the source LABEL, and the valid labels are listed in
             # `adapter_pin_labels` below. A cold model guessed "log" when the real
             # label was "text"; the pin was then silently ignored and the source

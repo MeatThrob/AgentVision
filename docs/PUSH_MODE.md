@@ -136,6 +136,79 @@ essentially free.
 
 ---
 
+## The other client problem, and the second channel
+
+Everything above is a **Claude Code hook**. In Cursor, VS Code, or any other MCP
+client there is no hook mechanism, so all of it is silent — AgentVision's best
+feature simply does not exist there.
+
+MCP's own answer is a **resource-updated notification**: the server tells the
+client that `agentvision://digest` has changed, and the client reads it if it
+wants to. No client-specific hook, no injected text, no bytes spent unless the
+client actually fetches. AgentVision implements this in the MCP server
+(`python_backend/api/claude_mcp.py`) and it is subject to the same three rules
+above, plus three more that exist because this is the only thing in AgentVision
+that runs **without an agent asking it to**:
+
+**4. No subscribers, no work.** The poller is started by the first client that
+opens a subscription stream and stopped when the last one closes. A server with
+nobody listening does nothing at all — zero polls.
+
+**5. It never consumes.** It polls `/ambient` with `force=1`, which by design
+skips `mark_surfaced`, the raw-log offset commit, and `mark_offered`. If it
+consumed, it would eat the very lines the Claude Code hook was about to deliver,
+and that loss would look like a program that had gone quiet.
+
+**6. It stands down for the other channel.** If another ambient session was
+injected in the last two minutes, the hook is demonstrably working and this
+channel says nothing. An agent told twice cannot tell it was one event. The
+count of times it stood down is reported, so "quiet because the hook has it" is
+distinguishable from "quiet because it is broken".
+
+### What it announces, and what it does not
+
+| Tier | Announced? |
+|---|---|
+| `silent` | no |
+| `heartbeat` | **no** — "still watching, all normal" is not worth waking a client for |
+| `notice` / `alert` / `raw` | yes, as `agentvision://digest`; an incident also announces `agentvision://incidents` |
+
+Repeats are suppressed on `content_fp` — a fingerprint built from the signals
+and the actual log bytes. **Not** from the rendered text: that text embeds a live
+clock (`LAST WRITE 144s AGO`), and hashing it announced the same unchanged log
+twice in five seconds. The fingerprint survives a client dropping and re-opening
+its stream, so a reconnect is not told the same thing again.
+
+### Seeing whether it is working
+
+`av_capabilities()` returns `your_client.push_channel`:
+
+```json
+{"enabled": true, "listeners": 1, "running": true, "polls": 42,
+ "published": 3, "quiet_for_other_channel": 7, "errors": 0, "last_error": ""}
+```
+
+A channel that fails silently looks exactly like one with nothing to say, which
+is the failure this whole project is about — so every counter is published,
+including the reason for the last error.
+
+### Limitation, stated rather than discovered
+
+This reaches clients that open a `subscriptions/listen` stream. The MCP SDK's
+high-level server does not implement the older `resources/subscribe` request —
+it advertises `resources.subscribe: false` — so a client that only speaks that
+older form is **not** reached. Such a client is pull-only, exactly as it is
+today: nothing regresses, but nothing improves either.
+
+### Turning it off
+
+`AGENTVISION_SUBSCRIBE_PUSH=0` disables it entirely.
+`AGENTVISION_SUBSCRIBE_POLL_S` (default 10) sets the poll interval, minimum 2.
+`AGENTVISION_SUBSCRIBE_QUIET_MS` (default 120000) is how long another active
+channel keeps it quiet.
+
+---
+
 ## The Stop backstop is OFF, and here is why
 
 A `Stop` hook can *block* the agent from ending its turn. Used well that is a

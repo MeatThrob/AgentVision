@@ -209,7 +209,7 @@ source files (bounded: 400 files max, 400 KB per file, skipping `.git`,
 | `mcp_tool_groups` | object | 19 groups. Each is `{tools: [...], relevant_here: N, ruled_out: N}`. Pick `plan.tools.primary` from here. See 4.4. |
 | `existing_logs_found` | list of objects | Every log this program has: `{label, path, declared, exists, bytes}`. `declared: true` = the profile already reads it. `declared: false` = **found on disk in the project and NOT read yet**; those entries also carry `detected_adapter`, `covered`, `sample`, and (when `covered` is false) `coverage_warning` + a copy-paste `how_to_add_an_adapter` body. **An undeclared log is only read if you pin it in `plan.adapters` — see 5.3.** |
 | `code_evidence` | object | The scan of the target's own source. This is what justifies your choices. See 4.3. |
-| `capture_settings` | object | `{interval_seconds: "0.1 - 10; ASK THE USER, do not assume", note: ...}`. |
+| `capture_settings` | object | `{interval_seconds: "0.1 - 10; ASK THE USER, do not assume", how_to_ask: ..., note: ...}`. You do not have to ask in prose — see 4.6. |
 | `you_must_decide` | list of strings | The four decisions expected of you. |
 | `do_not` | list of strings | Three named failure modes. |
 | `required_in_plan` | object | Short per-field reminder of the plan schema. |
@@ -390,6 +390,58 @@ So the real discriminator is GUI vs headless, not language.
 **Note:** these verdicts are computed from the **profile** (`capture_app` /
 `window_title` being set), not from your `plan.visual_capture`. A headless
 service whose profile happens to name a window will show GUI verdicts anyway.
+
+### 4.5 No `project_root`? The scan opened nothing
+
+If the active profile has no `project_root`, `code_evidence` comes back with
+`scanned_files: 0` and an `error`. **That is an absence of input, not an absence
+of signals**, and a plan committed on it is the blind guess this gate exists to
+prevent. AgentVision will not substitute its own working directory — it used to,
+and that meant scanning *itself* and presenting the result as evidence about
+your program.
+
+In that case `av_bridge_catalog()` asks the user where the code lives and
+returns the answer under `project_root_needed`:
+
+```json
+{"value": "/Users/you/src/widget", "how": "asked", "chosen_by_user": true,
+ "note": "project root: /Users/you/src/widget — you chose this.",
+ "apply_with": "av_create_profile(name=\"<program>\", project_root=\"/Users/you/src/widget\")",
+ "then": "call av_bridge_catalog() again — this catalog's token describes a scan that opened NO files"}
+```
+
+It does **not** apply it. Pointing a profile at a folder changes the user's
+configuration, so the tool names the call and leaves it to you. Re-fetch the
+catalog afterwards: the token you hold describes the empty scan.
+
+If `how` is anything other than `"asked"`, nobody answered — read `note`, and
+ask in prose yourself.
+
+### 4.6 The frame rate: let AgentVision ask
+
+`capture_settings.interval_seconds` says *ASK THE USER, do not assume*. You can
+do that literally, or you can call `av_capture_start()` **with no interval** and
+AgentVision will put the question and the supported range in front of the user
+itself over MCP elicitation.
+
+Either way, read `capture_rate_choice` in the response:
+
+| `how` | What it means |
+|---|---|
+| `asked` | the user chose this rate |
+| `declined` / `cancelled` | they were asked and did not answer; the fallback is in effect |
+| `unsupported` | this MCP client cannot show a prompt — **ask in prose** |
+| `no_context` | not an MCP call at all (HTTP, CLI) |
+| `failed` | the ask errored; `detail` has the reason verbatim |
+
+Only `asked` means a human chose. Everything else is AgentVision's default
+wearing a value's clothes, and saying "capture is running at 1 fps as you asked"
+on the strength of it would be a claim nobody established.
+
+The same shape governs `user_input`, the one emitter that records the human
+system-wide: selecting it makes `av_bridge_commit` ask for consent, an explicit
+**no** removes it from the plan, and where nobody can be asked your selection
+stands but `input_recording_consent` says plainly that nobody consented.
 
 ---
 
@@ -971,6 +1023,13 @@ GET  /bridge/report     -> what is actually built, plus live per-source adapter 
 
 Refusals from /capture/start and /install are HTTP 200 with
   "bridge_required": true  and  "started"/"installed": false.
+
+The catalog is also a RESOURCE, with the same bytes and the same token:
+  agentvision://catalog          -> read it without putting it in the transcript
+  agentvision://frame/{seq}.json     one frame, no image bytes
+  agentvision://frame/{seq}/region   only the pixels that changed
+  agentvision://incident/{id}        one frozen failure window
+  agentvision://log/raw{?from_offset}  the program's output, verbatim; PEEKS
 ```
 
 Minimum viable plan — every required field, nothing optional:

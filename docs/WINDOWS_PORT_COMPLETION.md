@@ -38,11 +38,11 @@ code anywhere else, that is a bug worth reporting.
 py -3 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-windows.txt
-pip install mcp
+pip install "mcp>=2.0,<3"
 python run_all_tests.py
 ```
 
-Expected: **54 suites, all pass**, with `bridge_gate` the only SKIP unless a
+Expected: **57 suites, all pass**, with `bridge_gate` the only SKIP unless a
 bridge is already listening (it tests the first-connection contract, so it needs
 a live one — start `python python_backend\api\bridge_server.py --no-autocapture`
 first to include it). On macOS that is the current result.

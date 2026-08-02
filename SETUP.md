@@ -92,7 +92,7 @@ silent: the bridge runs, the GUI works, and Claude simply has no AgentVision
 tools. Install the `mcp` package and register the server:
 
 ```bash
-pip install mcp
+pip install 'mcp>=2.0,<3'
 ```
 
 ```bash

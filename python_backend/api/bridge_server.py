@@ -331,7 +331,12 @@ def capture_rate_info(current_interval: float) -> dict:
             "= finer visual detail but more frames to review; slower = fewer shots. "
             "Then apply it with av_capture_set_interval(interval=1/fps) — e.g. 4 "
             "shots/sec = interval 0.25. Every frame is time-aligned to the logs, so "
-            "pick a rate that matches how fast the thing you're debugging changes."
+            "pick a rate that matches how fast the thing you're debugging changes. "
+            "You do not have to ask in prose: call av_capture_start() or "
+            "av_capture_set_interval() with NO interval and AgentVision puts the "
+            "question to the user itself over MCP elicitation. Where the client "
+            "cannot show a prompt, the response says so in `capture_rate_choice` "
+            "rather than passing a default off as the user's decision."
         ),
     }
 
@@ -1427,6 +1432,55 @@ def _frame_or_load(seq: int) -> dict | None:
     return data
 
 
+def _no_such_frame(seq: int):
+    """404 for a frame that does not exist — SAYING WHICH ONES DO.
+
+    `abort(404)` handed back Flask's stock "The requested URL was not found on
+    the server. If you entered the URL manually please check your spelling",
+    which is wrong twice over: the URL is a real route, and the caller is a
+    program that did not type anything. A caller reading that reasonably
+    concludes AgentVision is misconfigured, when the true fact is narrower and
+    more useful — that sequence has not been captured, or has been pruned.
+
+    So state what is actually retained. `frames_retained: 0` after a capture
+    that never started is a completely different diagnosis from a seq that
+    fell off the end of a 900-frame window, and the caller cannot tell those
+    apart from a bare 404.
+    """
+    with _lock:
+        live = sorted(_frames)
+        on_disk = sorted(_frames_on_disk)
+    known = sorted(set(live) | set(on_disk))
+    body = {
+        "error": f"no frame {seq}",
+        # Every error body in this server carries `status`; callers key off it
+        # rather than parsing prose. Omitting it here broke that contract.
+        "status": 404,
+        "seq": seq,
+        "frames_retained": len(known),
+        "retained_range": [known[0], known[-1]] if known else None,
+    }
+    if not known:
+        body["reason"] = ("no frames have been captured yet for the active "
+                          "profile — this is an empty recorder, not a missing "
+                          "route")
+        body["next"] = "av_capture_start()"
+    elif seq > known[-1]:
+        body["reason"] = (f"sequence {seq} is ahead of the newest captured "
+                          f"frame ({known[-1]})")
+        body["next"] = "av_latest_frame() for the newest, or av_visual_changes()"
+    elif seq < known[0]:
+        body["reason"] = (f"sequence {seq} is older than the retention window "
+                          f"(oldest retained is {known[0]}) and has been pruned")
+        body["next"] = "av_incidents() — frozen failure windows survive pruning"
+    else:
+        body["reason"] = (f"sequence {seq} falls inside the retained range but "
+                          f"is not present; frames are skipped when the target "
+                          f"window is not on screen")
+        body["next"] = "av_visual_changes() lists the sequences that do exist"
+    return jsonify(body), 404
+
+
 def _mark_seen(seq, how: str) -> None:
     """Record that the agent consumed this frame, which is what releases it for
     eviction. Every tier of the token ladder counts: reading a frame's JSON
@@ -2119,7 +2173,7 @@ def get_frame(seq: int):
                         f"program's frames, then request this seq again"),
                 "see": "GET /frames/collisions lists every seq owned by >1 profile",
             }), 404
-        abort(404)
+        return _no_such_frame(seq)
     return jsonify(_augment_frame_for_ai(frame)), 200
 
 
@@ -2219,7 +2273,7 @@ def get_frame_actions(seq: int):
     with _lock:
         frame = _frame_or_load(seq)
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     window_secs = _float_arg("window_secs", "5")
     frame_ms = float(frame.get("timestamp_ms") or 0)
     if not frame_ms:
@@ -2360,7 +2414,7 @@ def frame_alignment(seq: int):
     with _lock:
         frame = _frame_or_load(seq)
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     shutter_ms = float(frame.get("timestamp_ms") or 0)
     cm = frame.get("capture_meta") or {}
     pinned = frame.get("profile_action_log") or ""
@@ -4444,7 +4498,7 @@ def frame_overlay(seq: int):
     with _lock:
         frame = _frame_or_load(seq)
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     _mark_seen(seq, "overlay")
     frame_ms = float(frame.get("timestamp_ms") or 0)
     pinned   = frame.get("profile_action_log") or ""
@@ -4499,10 +4553,21 @@ def frame_annotate(seq: int):
     with _lock:
         frame = _frame_or_load(seq)
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     sidecar_json = frame.get("json_sidecar") or ""
     if not sidecar_json:
-        abort(404)
+        # The frame EXISTS; it just has no sidecar file to hang notes on. The
+        # stock 404 said the URL was not found, which is a different claim.
+        return jsonify({
+            "error": f"frame {seq} has no JSON sidecar on disk, so there is "
+                     f"nowhere to store or read annotations",
+            "status": 404,
+            "seq": seq,
+            "frame_exists": True,
+            "why": ("annotations live beside the frame's sidecar; frames held "
+                    "only in memory (not yet flushed, or captured with sidecar "
+                    "writing off) have no such file"),
+        }), 404
     ann_path = Path(sidecar_json).with_name(
         Path(sidecar_json).stem.replace("_frame", "") + "_annotations.json")
     if request.method == "GET":
@@ -4878,7 +4943,13 @@ def delete_profile(name: str):
         }), 409
     profiles = load_profiles()
     if name not in profiles:
-        abort(404)
+        return jsonify({
+            "error": f"no profile named {name!r}",
+            "status": 404,
+            "deleted": False,
+            "profiles": sorted(profiles),
+            "hint": "names are case-sensitive; av_list_profiles() lists them",
+        }), 404
     del profiles[name]
     try:
         save_profiles(profiles)
@@ -7867,7 +7938,7 @@ def frame_ocr(seq: int):
     with _lock:
         frame = _frame_or_load(seq)
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     _mark_seen(seq, "ocr")
     img = frame.get("annotated_image") or ""
     out = _ocr_image(img)
@@ -8548,7 +8619,7 @@ def frame_json(seq: int):
         _agent_reads["seqs_json"].add(seq)
         _mark_seen(seq, "frame_json")
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     want_thumb = request.args.get("thumbnail", "0") not in ("0", "", "false")
     thumb_w    = _int_arg("thumb_width", "64")
     want_ocr   = request.args.get("ocr", "1") not in ("0", "", "false")
@@ -8674,7 +8745,7 @@ def frame_region(seq: int):
         _agent_reads["region"] += 1
         _mark_seen(seq, "region")
     if not frame:
-        abort(404)
+        return _no_such_frame(seq)
     img = frame.get("annotated_image") or ""
     v = _visual_of(frame)
     size = v.get("size") or (v.get("structural") or {}).get("size") or [0, 0]
@@ -8800,7 +8871,7 @@ def error_moment():
         with _lock:
             frame = dict(_frames[seq]) if seq in _frames else None
         if frame is None:
-            abort(404)
+            return _no_such_frame(seq)
         err = _frame_error(frame)
         how = f"seq={seq}"
     elif fp:
@@ -9345,6 +9416,11 @@ def ambient_route():
                    "alert": _amb.ALERT_CAP}
     out["min_gap_ms"] = _amb.MIN_GAP_MS
     out["session_stats"] = _amb.MEMORY.stats(sid)
+    # Is another push channel already delivering to this agent? Lets a second
+    # channel (the MCP resource-updated poller) stand down rather than announce
+    # what the Claude Code hook just injected. None = no other session has ever
+    # been injected, which is not the same as "no other channel exists".
+    out["other_channel_ms_ago"] = _amb.MEMORY.other_channel_ms_ago(sid)
     out["what_this_is"] = (
         "The ambient (push) view. A hook calls this and injects `text` into the "
         "conversation only when inject=true. Silent by default, delta-only, "

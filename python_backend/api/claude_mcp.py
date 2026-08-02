@@ -47,6 +47,7 @@ import urllib.error
 # never a guessed "package not installed" message.
 _MCP_IMPORT_ATTEMPTS: list[tuple[str, str]] = []
 _MCPServer = None
+Context = None          # the per-call session handle; None on an SDK without it
 MCP_SDK_FLAVOR = "unknown"
 
 for _mod, _cls, _flavor in (
@@ -56,6 +57,10 @@ for _mod, _cls, _flavor in (
     try:
         _m = __import__(_mod, fromlist=[_cls])
         _MCPServer = getattr(_m, _cls)
+        # Context rides along in the same module in both flavors. It is what
+        # lets a tool ASK the user something instead of assuming — see
+        # elicit.py. Absence is survivable; every ask has a fallback.
+        Context = getattr(_m, "Context", None)
         MCP_SDK_FLAVOR = _flavor
         break
     except Exception as _e:  # ImportError, AttributeError, and anything the SDK raises
@@ -79,6 +84,28 @@ if _MCPServer is None:
 
 FastMCP = _MCPServer  # back-compat alias for anything importing FastMCP from here
 
+# ── elicitation (asking the user) ─────────────────────────────────────────────
+# This file is run BOTH as `python -m python_backend.api.claude_mcp` and as a
+# bare script (`python claude_mcp.py`) — the SETUP guides use the second form —
+# so the sibling import has to work either way. If it cannot be loaded at all,
+# every ask degrades to its documented fallback and SAYS SO; it never becomes a
+# silent default.
+try:
+    from . import elicit as _elicit                    # package import
+except ImportError:                                    # pragma: no cover
+    try:
+        import elicit as _elicit                       # script import
+    except Exception as _e:                            # last resort, still honest
+        _elicit = None
+        print(f"WARNING: elicit.py unavailable ({type(_e).__name__}: {_e}); "
+              "AgentVision will use documented fallbacks instead of asking.",
+              file=sys.stderr)
+except Exception as _e:                                # pragma: no cover
+    _elicit = None
+    print(f"WARNING: elicit.py failed to import ({type(_e).__name__}: {_e}); "
+          "AgentVision will use documented fallbacks instead of asking.",
+          file=sys.stderr)
+
 
 BRIDGE_BASE = os.environ.get("AGENTVISION_BRIDGE_URL", "http://127.0.0.1:7771")
 HTTP_TIMEOUT = float(os.environ.get("AGENTVISION_HTTP_TIMEOUT", "5.0"))
@@ -96,7 +123,30 @@ def _http_get(path: str, params: dict | None = None) -> dict | list | str:
             except json.JSONDecodeError:
                 return raw
     except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}", "url": url, "body": e.read().decode("utf-8", "replace")}
+        # PARSE the error body, as _http_post already did. The bridge answers a
+        # missing frame with {error, status, seq, frames_retained,
+        # retained_range, reason, next} — which is the whole point of that
+        # answer. Returning it as an escaped JSON STRING under `body` buried it:
+        # the agent saw {"error": "HTTP 404"} and a wall of backslashes, and the
+        # useful part ("no frames have been captured yet — this is an empty
+        # recorder, not a missing route") was one unescaping away from nobody.
+        raw = ""
+        try:
+            raw = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        out: dict = {"error": f"HTTP {e.code}", "status": e.code, "url": url}
+        try:
+            detail = json.loads(raw)
+        except Exception:
+            detail = None
+        if isinstance(detail, dict):
+            # The body's own `error` is the specific one; keep the HTTP code too.
+            out["http_error"] = out.pop("error")
+            out.update(detail)
+        elif raw:
+            out["body"] = raw[:2000]
+        return out
     except urllib.error.URLError as e:
         return {"error": f"URL error: {e.reason}", "url": url,
                 "hint": "Is bridge_server.py running on " + BRIDGE_BASE + " ?"}
@@ -137,6 +187,34 @@ def _http_post(path: str, body: dict | None = None) -> Any:
         return out
     except Exception as e:
         return {"error": str(e), "url": url}
+
+
+# ── async wrappers for the tools that ask the user something ─────────────────
+# The HTTP helpers above are blocking urllib. Inside an `async def` tool that
+# would hold the event loop for up to HTTP_TIMEOUT seconds, and the event loop
+# is what carries the elicitation round-trip back from the client — so the tools
+# that ask run their HTTP through a worker thread. Sync tools are unaffected.
+
+async def _a(fn, *args, **kwargs):
+    """Run a blocking bridge call off the event loop."""
+    try:
+        import anyio
+    except Exception:                              # no anyio: correctness first
+        return fn(*args, **kwargs)
+    import functools
+    return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+
+def _ask_note(target: dict, key: str, answer) -> dict:
+    """Attach an Answer to a tool response under `key`, without ever dropping
+    the sentence that says whether a human actually chose."""
+    if not isinstance(target, dict) or answer is None:
+        return target
+    try:
+        target[key] = answer.as_dict()
+    except Exception:
+        pass
+    return target
 
 
 # ── MCP server ────────────────────────────────────────────────────────────────
@@ -259,11 +337,184 @@ def _ro(title: str):
         return None
 
 
+# ── PORTABLE PUSH: resource-updated notifications ─────────────────────────────
+# Push Mode (tools/agentvision_hook.py) is a CLAUDE CODE hook. In Cursor, VS
+# Code, or any other MCP client, AgentVision's best feature — telling the agent
+# something broke without being asked — is simply silent. MCP's own answer is a
+# resource-updated notification, which needs no client-specific hook.
+#
+# THREE RULES, each guarding a way this could go wrong:
+#
+#  1. NO SUBSCRIBERS, NO WORK. The poller is started by the first client that
+#     opens a subscription stream and stopped when the last one closes. A stdio
+#     server with nobody listening does nothing at all.
+#  2. IT NEVER CONSUMES. It polls /ambient with force=1, which by design skips
+#     mark_surfaced, the raw-log offset commit, and mark_offered. If it consumed,
+#     it would eat the very lines the Claude Code hook was about to deliver, and
+#     the loss would look like a program that went quiet.
+#  3. IT STANDS DOWN FOR THE OTHER CHANNEL. If another ambient session was
+#     injected recently, the hook is working and this channel says nothing —
+#     an agent told twice cannot tell it was one event.
+#
+# LIMITATION, stated rather than discovered: this reaches `subscriptions/listen`
+# streams. The SDK's high-level server does not implement the older
+# `resources/subscribe` request (it advertises resources.subscribe=false), so a
+# client that only speaks that older form is NOT reached by this. Such a client
+# is pull-only, exactly as it is today; nothing regresses, but nothing improves.
+_PUSH_ENABLED = os.environ.get("AGENTVISION_SUBSCRIBE_PUSH", "1") not in (
+    "0", "", "false", "no")
+_PUSH_INTERVAL_S = max(2.0, float(os.environ.get(
+    "AGENTVISION_SUBSCRIBE_POLL_S", "10")))
+#: While another channel has injected within this window, stay quiet.
+_PUSH_QUIET_MS = float(os.environ.get("AGENTVISION_SUBSCRIBE_QUIET_MS", "120000"))
+#: Its own ambient session id, so its bookkeeping cannot collide with a hook's.
+_PUSH_SESSION_ID = "mcp-resource-subscription"
+
+#: Everything this channel has done, reported through av_capabilities. A push
+#: channel that fails silently is the same shape as one that has nothing to say.
+_push_state: dict = {
+    "enabled": _PUSH_ENABLED, "listeners": 0, "running": False,
+    "polls": 0, "published": 0, "quiet_for_other_channel": 0,
+    "errors": 0, "last_error": "", "last_published_uri": "",
+    "poll_interval_s": _PUSH_INTERVAL_S,
+    #: Survives a task restart on purpose — see _push_loop.
+    "last_fingerprint": None,
+}
+
+try:
+    from mcp.server.subscriptions import (InMemorySubscriptionBus as _InMemBus,
+                                          ResourceUpdated as _ResourceUpdated)
+except Exception:                                    # SDK without subscriptions
+    _InMemBus = _ResourceUpdated = None
+
+
+class _PollWhileSubscribed:
+    """A SubscriptionBus that runs AgentVision's poller only while listened to.
+
+    Wraps the SDK's in-memory bus rather than replacing it: fan-out semantics
+    stay the SDK's problem. All this adds is a listener count and the lifecycle
+    it implies.
+    """
+
+    def __init__(self) -> None:
+        self._inner = _InMemBus()
+        self._count = 0
+        self._task = None
+
+    async def publish(self, event) -> None:
+        await self._inner.publish(event)
+
+    def subscribe(self, listener):
+        off_inner = self._inner.subscribe(listener)
+        self._count += 1
+        _push_state["listeners"] = self._count
+        self._start()
+        stopped = False
+
+        def unsubscribe() -> None:
+            nonlocal stopped
+            if not stopped:
+                stopped = True
+                self._count = max(0, self._count - 1)
+                _push_state["listeners"] = self._count
+                if self._count == 0:
+                    self._stop()
+            off_inner()
+
+        return unsubscribe
+
+    def _start(self) -> None:
+        if not _PUSH_ENABLED or self._task is not None:
+            return
+        try:
+            import asyncio
+            self._task = asyncio.ensure_future(_push_loop(self))
+            _push_state["running"] = True
+        except Exception as e:                        # no loop: stay pull-only
+            _push_state["last_error"] = f"could not start poller: {e}"
+
+    def _stop(self) -> None:
+        task, self._task = self._task, None
+        _push_state["running"] = False
+        if task is not None:
+            try:
+                task.cancel()
+            except Exception:
+                pass
+
+
+async def _push_loop(bus) -> None:
+    """Poll what AgentVision would say, and announce only genuine changes.
+
+    The last announced fingerprint lives in `_push_state`, NOT in a local, so
+    a client that drops its stream and re-listens does not get the same fact
+    announced again. It comes from the bridge's `content_fp`, which is derived
+    from the signals and the actual log bytes — hashing the rendered text
+    announced the same unchanged log twice in five seconds, because that text
+    carries a live "LAST WRITE 144s AGO" clock.
+    """
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(_PUSH_INTERVAL_S)
+            amb = await _a(_http_get, "/ambient",
+                           {"force": "1", "session_id": _PUSH_SESSION_ID})
+            _push_state["polls"] += 1
+            if not isinstance(amb, dict) or amb.get("error"):
+                if isinstance(amb, dict) and amb.get("error"):
+                    _push_state["errors"] += 1
+                    _push_state["last_error"] = str(amb.get("error"))[:200]
+                continue
+            if not amb.get("inject") or amb.get("tier") in ("silent", "heartbeat"):
+                # A heartbeat is "still watching, all normal". Waking a client
+                # for that is exactly the chatter that trains agents to ignore
+                # a channel.
+                continue
+            fingerprint = amb.get("content_fp")
+            if not fingerprint:
+                # An older bridge without content_fp. Say so rather than fall
+                # back to hashing the text, which is the chatter bug.
+                _push_state["last_error"] = (
+                    "the bridge did not return content_fp; this channel cannot "
+                    "tell a repeat from a change, so it is staying quiet")
+                continue
+            if fingerprint == _push_state.get("last_fingerprint"):
+                continue
+            other = amb.get("other_channel_ms_ago")
+            if other is not None and other < _PUSH_QUIET_MS:
+                _push_state["quiet_for_other_channel"] += 1
+                _push_state["last_fingerprint"] = fingerprint
+                continue
+            _push_state["last_fingerprint"] = fingerprint
+            uris = ["agentvision://digest"]
+            if amb.get("incident_ids"):
+                uris.append("agentvision://incidents")
+            for uri in uris:
+                await bus.publish(_ResourceUpdated(uri=uri))
+                _push_state["published"] += 1
+                _push_state["last_published_uri"] = uri
+        except asyncio.CancelledError:
+            _push_state["running"] = False
+            raise
+        except Exception as e:                        # a poller must not die
+            _push_state["errors"] += 1
+            _push_state["last_error"] = f"{type(e).__name__}: {e}"[:200]
+
+
+_SUBSCRIPTIONS = _PollWhileSubscribed() if _InMemBus is not None else None
+
 try:
     mcp = FastMCP("agentvision", instructions=_SERVER_INSTRUCTIONS,
-                  version="5.1")
+                  version="5.1", subscriptions=_SUBSCRIPTIONS)
 except TypeError:                                    # SDK without those kwargs
-    mcp = FastMCP("agentvision")
+    try:
+        mcp = FastMCP("agentvision", instructions=_SERVER_INSTRUCTIONS,
+                      version="5.1")
+    except TypeError:
+        mcp = FastMCP("agentvision")
+    _push_state["enabled"] = False
+    _push_state["last_error"] = ("this MCP SDK does not accept a subscription "
+                                 "bus; resource-updated push is unavailable")
 
 
 @mcp.tool()
@@ -838,7 +1089,8 @@ def av_delete_profile(name: str) -> dict:
 
 
 @mcp.tool()
-def av_capture_start(interval: float | None = None, force: bool = False) -> dict:
+async def av_capture_start(interval: float | None = None, force: bool = False,
+                           ctx: Context = None) -> dict:
     """Start the auto-capture loop (periodic screenshot + time-aligned frame).
 
     THE FORCE: before starting capture on a NEW program, call av_preflight; if it
@@ -850,17 +1102,40 @@ def av_capture_start(interval: float | None = None, force: bool = False) -> dict
     (the GUI's Start button does this).
 
     `interval` is SECONDS PER SHOT (e.g. 0.25 = 4 shots/sec, 1.0 = 1 shot/sec,
-    0.1 = 10 shots/sec, the fastest supported). If you don't already know the
-    user's preferred rate, ASK THEM how many screenshots per second they want
-    and present the supported range (typically 0.1–10 shots/sec) BEFORE starting
-    — do this at the start or continuation of every project. The response echoes
-    the applied rate and the full `rate` envelope/guidance."""
+    0.1 = 10 shots/sec, the fastest supported).
+
+    LEAVE `interval` OUT and AgentVision asks the user directly — it puts the
+    question and the supported range in front of them and uses their answer. It
+    only does that where the client supports MCP elicitation; where it does not,
+    the profile's existing rate is used and the response says, in
+    `capture_rate_choice`, that nobody was asked. Read that field before telling
+    the user what rate you are running at. Pass `interval` explicitly only when
+    the user has ALREADY told you what they want."""
+    rate_answer = None
+    if interval is None and _elicit is not None:
+        # Reading the current rate is a courtesy (it lets the prompt say what
+        # the rate is now); failing to read it must not cancel the question.
+        current = None
+        try:
+            st = await _a(_http_get, "/status")
+            if isinstance(st, dict):
+                cr = st.get("capture_rate") or {}
+                current = cr.get("interval_seconds") or cr.get("interval")
+                current = float(current) if current else None
+        except Exception:
+            current = None
+        rate_answer = await _elicit.ask_capture_rate(
+            ctx, fallback_interval=float(current or 1.0),
+            current_interval=current)
+        if rate_answer.chosen_by_user:
+            interval = float(rate_answer.value)
     body: dict = {}
     if interval is not None:
         body["interval"] = interval
     if force:
         body["force"] = True
-    return _http_post("/capture/start", body)
+    out = await _a(_http_post, "/capture/start", body)
+    return _ask_note(out, "capture_rate_choice", rate_answer)
 
 
 @mcp.tool()
@@ -870,16 +1145,45 @@ def av_capture_stop() -> dict:
 
 
 @mcp.tool()
-def av_capture_set_interval(interval: float) -> dict:
+async def av_capture_set_interval(interval: float | None = None,
+                                  ctx: Context = None) -> dict:
     """Set the capture cadence in SECONDS PER SHOT. Takes effect on the next tick.
 
     Convert the user's shots-per-second to interval: interval = 1 / fps
     (4 shots/sec → 0.25, 2 → 0.5, 10 → 0.1). Range: interval 0.1s (10 shots/sec,
     fastest) up. Prefer a faster rate when debugging something that changes
     quickly (animation, a race, a crash) and a slower rate for long idle waits.
-    If unsure what the user wants, ASK — present the full range first. The
-    response includes the applied rate and the `rate` guidance envelope."""
-    return _http_put("/capture/interval", {"interval": float(interval)})
+
+    CALL IT WITH NO ARGUMENT to have AgentVision ask the user instead of
+    guessing. Where the client cannot show a prompt the rate is left unchanged
+    and `capture_rate_choice` says so — it is never quietly reset to a default.
+    The response includes the applied rate and the `rate` guidance envelope."""
+    rate_answer = None
+    if interval is None:
+        if _elicit is None:
+            return {"error": "no interval given and AgentVision cannot ask "
+                             "(elicit.py unavailable)",
+                    "changed": False,
+                    "fix": "pass interval explicitly, e.g. 0.25 for 4 shots/sec"}
+        st = await _a(_http_get, "/status")
+        current = None
+        if isinstance(st, dict):
+            cr = st.get("capture_rate") or {}
+            current = cr.get("interval_seconds") or cr.get("interval")
+        rate_answer = await _elicit.ask_capture_rate(
+            ctx, fallback_interval=float(current or 1.0),
+            current_interval=float(current) if current else None)
+        if not rate_answer.chosen_by_user:
+            # Nobody chose. Writing the fallback would look like a change the
+            # user asked for; leaving it alone and saying why does not.
+            return {"changed": False,
+                    "interval_seconds": rate_answer.value,
+                    "capture_rate_choice": rate_answer.as_dict(),
+                    "next": "pass interval explicitly to set it anyway "
+                            "(interval = 1 / shots_per_second)"}
+        interval = float(rate_answer.value)
+    out = await _a(_http_put, "/capture/interval", {"interval": float(interval)})
+    return _ask_note(out, "capture_rate_choice", rate_answer)
 
 
 @mcp.tool()
@@ -1141,7 +1445,7 @@ def av_metrics(window: int = 50) -> dict:
 
 
 @mcp.tool()
-def av_capabilities() -> dict:
+async def av_capabilities(ctx: Context = None) -> dict:
     """The AI's 'what can I do here'. What AgentVision can do RIGHT NOW: platform,
     capture backend, log-adapter + source-reader counts, active profile + language,
     capture/daemon status, and the catalog of analysis tools grouped by purpose
@@ -1149,10 +1453,36 @@ def av_capabilities() -> dict:
     capture / source). Token-bounded — counts and a curated tool list, never the
     full adapter dump.
 
+    ALSO reports `your_client` — what the MCP client YOU are running in supports,
+    and what AgentVision does instead where it does not. Two things vary by
+    client and change how you should behave: whether AgentVision can put a
+    question to the user itself (elicitation), and whether it can push state to
+    you without being asked. Where it cannot ask, YOU must ask in prose.
+
     Read `token_rule` and the `cheap_visual_path` group: those are the tools that
     let you observe the program without spending vision tokens. av_start_here is
     the shorter, workflow-oriented version of this."""
-    return _http_get("/capabilities")
+    out = await _a(_http_get, "/capabilities")
+    if isinstance(out, dict) and _elicit is not None:
+        try:
+            out["your_client"] = _elicit.client_report(ctx)
+            out["your_client"]["mcp_sdk"] = MCP_SDK_FLAVOR
+            # Counted from the live registry, never written down: a hardcoded
+            # number here would drift the moment a resource is added, and this
+            # response is exactly where an agent would trust it.
+            n_fixed = len(await mcp.list_resources())
+            n_tmpl = len(await mcp.list_resource_templates())
+            out["your_client"]["resources"] = (
+                f"{n_fixed} fixed + {n_tmpl} templated URIs under "
+                f"agentvision:// — read agentvision://catalog instead of "
+                f"calling av_bridge_catalog() when you want the option set out "
+                f"of the transcript")
+            # A push channel that fails silently looks exactly like one with
+            # nothing to say. Publish its counters so the difference is visible.
+            out["your_client"]["push_channel"] = dict(_push_state)
+        except Exception:
+            pass
+    return out
 
 
 @mcp.tool()
@@ -1399,7 +1729,7 @@ def av_watches(since_baseline: bool = False, clear: bool = False) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool(annotations=_ro("Start here"))
-def av_start_here() -> dict:
+async def av_start_here(ctx: Context = None) -> dict:
     """READ THIS FIRST, before any other AgentVision tool.
 
     Tells you: what AgentVision is watching right now, WHETHER THIS PROGRAM'S
@@ -1419,9 +1749,20 @@ def av_start_here() -> dict:
     WHEN: at the start of any session where you might need to observe a running
     program — even if you are not sure AgentVision is set up yet (this tells you).
 
+    ALSO returns `your_client`: whether AgentVision can ask the user a question
+    itself in the client you are running in, and whether it can push state to
+    you unprompted. Where it cannot ask, asking is YOUR job — check that block
+    before you assume a default rate or a consent you never obtained.
+
     DO NOT: start taking your own screenshots or grepping logs before calling
     this. Capture is very likely already running and already parsed."""
-    return _http_get("/start_here")
+    out = await _a(_http_get, "/start_here")
+    if isinstance(out, dict) and _elicit is not None:
+        try:
+            out["your_client"] = _elicit.client_report(ctx)
+        except Exception:
+            pass
+    return out
 
 
 @mcp.tool(annotations=_ro("Visual changes"))
@@ -1635,7 +1976,7 @@ def av_bridge_status() -> dict:
 
 
 @mcp.tool(annotations=_ro("Bridge catalog (review first)"))
-def av_bridge_catalog() -> dict:
+async def av_bridge_catalog(ctx: Context = None) -> dict:
     """EVERY option AgentVision can build into this program. Nothing pre-selected.
 
     Read this before building a bridge on a new program. It lists:
@@ -1646,7 +1987,9 @@ def av_bridge_catalog() -> dict:
       mcp_tool_groups      all 90 tools in 19 groups, each entry carrying what
                            the tool returns, what it NEEDS, its token cost and
                            a relevance verdict for THIS program
-      capture_settings     frame rate — ASK THE USER, do not assume
+      capture_settings     frame rate — ASK THE USER, do not assume (or call
+                           av_capture_start() with no interval and AgentVision
+                           asks them for you)
       you_must_decide      the actual decisions this program needs from you
 
     Key distinction the catalog spells out: ADAPTERS parse logs that exist,
@@ -1656,13 +1999,42 @@ def av_bridge_catalog() -> dict:
     Returns a `catalog_token`. av_bridge_commit REJECTS a plan without a matching
     token, so reviewing the options is a mechanical precondition, not a suggestion.
 
+    IF THE PROFILE HAS NO project_root, the code scan opens nothing and
+    `code_evidence` is empty — an absence of INPUT, not an absence of signals,
+    and committing on it is the blind guess this gate exists to prevent. In that
+    case this tool asks the user where the code lives and returns the answer
+    under `project_root_needed`. It does NOT apply it: pointing a profile at a
+    folder is a change to the user's configuration, so the response names the
+    exact call to make. Re-fetch this catalog afterwards — the token you have
+    describes a scan of nothing.
+
     NEXT: av_bridge_commit(plan={...}) using the token."""
-    return _http_get("/bridge/catalog")
+    cat = await _a(_http_get, "/bridge/catalog")
+    if not isinstance(cat, dict):
+        return cat
+    ev = cat.get("code_evidence")
+    rootless = (isinstance(ev, dict)
+                and "project_root" in str(ev.get("error") or ""))
+    if rootless and _elicit is not None:
+        try:
+            ans = await _elicit.ask_project_root(ctx)
+            block = ans.as_dict()
+            block["apply_with"] = (
+                f'av_create_profile(name="<program>", '
+                f'project_root="{ans.value}")' if ans.chosen_by_user
+                else 'av_create_profile(name="<program>", project_root="...")')
+            block["then"] = ("call av_bridge_catalog() again — this catalog's "
+                             "token describes a scan that opened NO files")
+            cat["project_root_needed"] = block
+        except Exception:
+            pass
+    return cat
 
 
 @mcp.tool(annotations={"title": "Commit bridge plan (builds it)",
                        "readOnlyHint": False})
-def av_bridge_commit(plan: dict, replan: bool = False) -> dict:
+async def av_bridge_commit(plan: dict, replan: bool = False,
+                           ctx: Context = None) -> dict:
     """COMMIT your plan — this is what actually builds the bridge.
 
     AgentVision builds exactly what you name here and nothing else.
@@ -1709,12 +2081,49 @@ def av_bridge_commit(plan: dict, replan: bool = False) -> dict:
     A `replan` may also RE-PIN an already-declared source — that is how you switch
     a log to an adapter you have since written for it.
 
+    THE ONE EMITTER THAT NEEDS A HUMAN. `user_input` runs a SYSTEM-WIDE recorder
+    of the user's keystrokes and mouse clicks — not scoped to the window being
+    debugged. Selecting it makes this tool ask the person at the keyboard, and
+    an explicit "no" REMOVES it from the plan; the rest of the plan is built
+    unchanged. Where the client cannot show a prompt, your selection stands (so
+    nothing silently overrides your decision) and `input_recording_consent`
+    records that nobody consented. Tell the user what that field says.
+
     On success the selected emitters are scaffolded into the project, the plan is
     persisted with your rationale, and the gate never fires for this program again.
 
     NEXT: av_capture_start()."""
-    return _http_post("/bridge/commit",
-                      {"plan": plan, "replan": bool(replan)})
+    consent = None
+    emitters = list((plan or {}).get("emitters") or [])
+    if "user_input" in emitters and _elicit is not None:
+        try:
+            # fallback=True: the agent already chose this emitter. In a client
+            # that cannot ask, refusing it would override a stated decision on
+            # the strength of a question nobody heard.
+            consent = await _elicit.ask_input_recording_consent(ctx,
+                                                                fallback=True)
+            if consent.how == _elicit.HOW_ASKED and not consent.value:
+                plan = dict(plan)
+                plan["emitters"] = [e for e in emitters if e != "user_input"]
+                why = dict(plan.get("why") or {})
+                why.pop("user_input", None)
+                plan["why"] = why
+        except Exception:
+            consent = None
+    out = await _a(_http_post, "/bridge/commit",
+                   {"plan": plan, "replan": bool(replan)})
+    if consent is not None and isinstance(out, dict):
+        block = consent.as_dict()
+        if consent.how == _elicit.HOW_ASKED and not consent.value:
+            block["effect"] = ("user_input was REMOVED from the committed plan "
+                               "— the user declined. Everything else was built "
+                               "as you specified.")
+        elif consent.how != _elicit.HOW_ASKED:
+            block["effect"] = ("user_input was built AS YOU SELECTED IT, but "
+                               "nobody consented to it. Say so, and offer to "
+                               "replan without it.")
+        out["input_recording_consent"] = block
+    return out
 
 
 @mcp.tool(annotations=_ro("Raw log, verbatim"))
@@ -2091,13 +2500,22 @@ makes the frames-plus-logs correlation actually work.
 If preflight reports gaps, call av_add_adapter for each missing debug-log format
 (give it a real sample line), then re-run av_preflight until it is clean.
 
-Only then start capture with av_capture_start. Ask the user how many screenshots
-per second they want first — av_status.capture_rate shows the supported range."""
+Only then start capture with av_capture_start — call it with NO interval and
+AgentVision will ask the user how many screenshots per second they want, and
+tell you in `capture_rate_choice` whether it managed to."""
 
 
 # ── MCP RESOURCES ─────────────────────────────────────────────────────────────
 # Resources let the agent pull context WITHOUT spending a tool call, and let the
 # client attach them to the conversation automatically.
+#
+# FIXED URIs below are the "what is happening now" views. TEMPLATED URIs (further
+# down) address ONE artifact by its identifier — a specific frame, a specific
+# incident. That distinction matters for cost: a tool call carries its whole
+# result into the transcript whether or not the agent needed all of it, while a
+# resource is fetched by the client only when something actually wants it. The
+# 185 KB first-connection catalog is the clearest case, and it is why
+# `agentvision://catalog` exists alongside av_bridge_catalog().
 
 @mcp.resource("agentvision://start_here", name="AgentVision: start here",
               mime_type="application/json", annotations=_res_ann(1.0, False),
@@ -2166,6 +2584,97 @@ def _res_token_report() -> str:
                           "the seconds BEFORE each failure, still on disk.")
 def _res_incidents() -> str:
     return json.dumps(_http_get("/incidents"), indent=2)
+
+
+@mcp.resource("agentvision://catalog",
+              name="AgentVision: first-connection catalog",
+              mime_type="application/json", annotations=_res_ann(0.7, False),
+              description="Every emitter, adapter, reader and tool AgentVision "
+                          "could build into this program, with the code evidence "
+                          "scanned from it and a catalog_token. Same bytes as "
+                          "av_bridge_catalog(); read it here to keep it out of "
+                          "the transcript until something needs it.")
+def _res_catalog() -> str:
+    # Deliberately the SAME endpoint the tool uses, so the catalog_token this
+    # returns is valid for av_bridge_commit. A parallel implementation here
+    # would eventually drift, and a stale token is rejected with no clue why.
+    return json.dumps(_http_get("/bridge/catalog"), indent=2)
+
+
+# ── TEMPLATED RESOURCES — address ONE artifact ────────────────────────────────
+
+@mcp.resource("agentvision://frame/{seq}.json",
+              name="AgentVision: one frame as JSON",
+              mime_type="application/json", annotations=_res_ann(0.6),
+              description="Frame {seq} described as JSON — perceptual hash, "
+                          "change score, changed region, on-screen text — with "
+                          "NO image bytes. The cheap way to inspect a specific "
+                          "moment av_visual_changes pointed you at.")
+def _res_frame_json(seq: str) -> str:
+    try:
+        n = int(str(seq).strip())
+    except (TypeError, ValueError):
+        return json.dumps({"error": f"frame sequence must be an integer, "
+                                    f"got {seq!r}"}, indent=2)
+    return json.dumps(_http_get(f"/frame/{n}/json"), indent=2)
+
+
+@mcp.resource("agentvision://frame/{seq}/region",
+              name="AgentVision: the changed pixels of one frame",
+              mime_type="application/json", annotations=_res_ann(0.5),
+              description="Only the region of frame {seq} that CHANGED, "
+                          "base64-encoded in `image_b64`, with the token math "
+                          "for what that crop cost versus the full frame. "
+                          "Escalate here when the JSON is not enough.")
+def _res_frame_region(seq: str) -> str:
+    try:
+        n = int(str(seq).strip())
+    except (TypeError, ValueError):
+        return json.dumps({"error": f"frame sequence must be an integer, "
+                                    f"got {seq!r}"}, indent=2)
+    return json.dumps(_http_get(f"/frame/{n}/region"), indent=2)
+
+
+@mcp.resource("agentvision://incident/{incident_id}",
+              name="AgentVision: one frozen incident",
+              mime_type="application/json", annotations=_res_ann(0.9, False),
+              description="One failure window the flight recorder froze: the "
+                          "trigger, the frames either side of it, and the exact "
+                          "follow-up calls. Ids come from agentvision://incidents.")
+def _res_incident(incident_id: str) -> str:
+    ident = str(incident_id or "").strip()
+    if not ident:
+        return json.dumps({"error": "no incident id given",
+                           "hint": "list them at agentvision://incidents"},
+                          indent=2)
+    return json.dumps(_http_get("/incidents", {"id": ident}), indent=2)
+
+
+@mcp.resource("agentvision://log/raw{?from_offset}",
+              name="AgentVision: the program's own output, verbatim",
+              mime_type="application/json", annotations=_res_ann(0.85, False),
+              description="What the program actually printed. No levels, no "
+                          "ranking, no filtering; identical consecutive lines "
+                          "collapse losslessly to {line, repeat:N}. Optional "
+                          "from_offset starts at a byte offset. Reading this "
+                          "resource PEEKS — it never advances a session's read "
+                          "position, so it is safe to re-read.")
+def _res_log_raw(from_offset: str = "") -> str:
+    # peek=1 is not a detail. A resource is addressable and re-readable by
+    # definition; if reading one consumed the log cursor, a client that
+    # auto-attached it would silently eat the lines av_log_raw was about to
+    # hand the agent, and the loss would look like a program that went quiet.
+    params: dict = {"session_id": "resource", "peek": 1}
+    off = str(from_offset or "").strip()
+    if off:
+        try:
+            params["from_offset"] = int(off)
+        except ValueError:
+            return json.dumps({"error": f"from_offset must be an integer byte "
+                                        f"offset, got {from_offset!r}"}, indent=2)
+    else:
+        params["all"] = 1
+    return json.dumps(_http_get("/log/raw", params), indent=2)
 
 
 def main() -> None:

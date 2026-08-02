@@ -40,7 +40,7 @@ python-xlib>=0.33     # X11 window enumeration (EWMH) + geometry + active win
 evdev>=1.6.0          # input daemon backend (/dev/input/event*)
 
 # ── Optional: only needed if you also expose AgentVision to Claude as MCP tools
-# mcp>=1.0.0
+# mcp>=2.0.0,<3
 
 # ── Optional: on-screen text OCR (av_ocr_frame / av_read_screen) ────────
 # Reads UI text / error dialogs / stack traces from a frame WITHOUT vision

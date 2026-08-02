@@ -263,7 +263,7 @@ register the server. `claude_mcp.py` imports only the standard library plus
 `mcp`, so point Claude Code directly at the script file (no `cwd` needed):
 
 ```bat
-py -3 -m pip install mcp
+py -3 -m pip install "mcp>=2.0,<3"
 claude mcp add agentvision -- python C:\Users\<you>\AgentVision\python_backend\api\claude_mcp.py
 ```
 

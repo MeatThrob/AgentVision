@@ -478,5 +478,52 @@ urllib.request.urlopen(urllib.request.Request(
     BR + "/profiles/gatetest", method="DELETE"), timeout=20)
 shutil.rmtree(work, ignore_errors=True)
 
+# ── the catalog RESOURCE must be interchangeable with the catalog TOOL ───────
+# `agentvision://catalog` exists so a client can fetch the ~200 KB catalog on
+# demand instead of carrying it in the transcript. That is only safe if its
+# catalog_token is the one /bridge/commit will accept: a token from a divergent
+# code path is rejected as STALE, and the error points at the plan rather than
+# at the resource that produced it — a long way from the cause. Checked here
+# rather than in test_resources.py because it needs a live bridge, and this is
+# the suite that has one.
+try:
+    import asyncio as _aio
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import api.claude_mcp as _M
+
+    _tool = _aio.run(_M.av_bridge_catalog())
+    _res = json.loads(list(_aio.run(
+        _M.mcp.read_resource("agentvision://catalog")))[0].content)
+    check("agentvision://catalog returns a catalog at all",
+          isinstance(_res, dict) and "catalog_token" in _res,
+          json.dumps(_res)[:160])
+    check("...with the SAME catalog_token av_bridge_catalog() hands out",
+          _res.get("catalog_token") == _tool.get("catalog_token"),
+          f"resource={_res.get('catalog_token')} tool={_tool.get('catalog_token')}")
+    # The resource is the catalog and nothing but the catalog. The TOOL may
+    # carry one extra key — `project_root_needed`, which only appears when the
+    # profile has no project_root and the tool asked the user where the code
+    # lives. A resource read is not the place for a prompt (clients attach them
+    # automatically), so that key is tool-only BY DESIGN. Any OTHER divergence
+    # means the two paths have drifted.
+    _tool_only = set(_tool) - set(_res)
+    check("...and the same option set, not a summary of it",
+          not (set(_res) - set(_tool)) and _tool_only <= {"project_root_needed"},
+          f"resource-only={set(_res) - set(_tool)} tool-only={_tool_only}")
+    if "project_root_needed" in _tool_only:
+        # …and the resource must not hide the reason: a rootless scan opened no
+        # files, and reading that as "this program has no signals" is the exact
+        # misread the evidence block exists to prevent.
+        check("a rootless scan is still visible to a resource reader",
+              "project_root" in str(((_res.get("code_evidence") or {})
+                                     .get("error") or "")),
+              str((_res.get("code_evidence") or {}).get("error")))
+except SystemExit:
+    print("  [warn] catalog-resource parity not checked: the `mcp` SDK is not "
+          "installed in this interpreter")
+except Exception as _e:
+    check("the catalog resource is readable", False,
+          f"{type(_e).__name__}: {_e}")
+
 print(f"\n=== {ok} passed / {bad} failed ===")
 sys.exit(1 if bad else 0)

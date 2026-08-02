@@ -6,7 +6,14 @@ pillow>=10.0.0
 # clean-clone test found three suites reporting FAIL rather than SKIP because
 # `import mcp` exits — the tool that exposes ~90 av_* tools to an AI agent
 # cannot run at all without this, so it is not optional.
-mcp>=1.0.0
+#
+# >=2.0 is what is actually TESTED, not the oldest thing that might work. 2.0
+# renamed the high-level server class (FastMCP -> MCPServer); claude_mcp.py has
+# a version-tolerant import that absorbs the rename, and elicitation and
+# resource templates are used through the same both-flavors surface. That shim
+# is a courtesy to an existing 1.x install, not a supported configuration — the
+# suite has only ever been run against 2.x, so that is what the pin says.
+mcp>=2.0.0,<3
 pytest>=7.0.0
 pytest-json-report>=1.5.0
 

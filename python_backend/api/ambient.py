@@ -179,6 +179,32 @@ class SessionMemory:
         with self._lock:
             self._sess(sid)["silent_calls"] += 1
 
+    def other_channel_ms_ago(self, sid: str) -> float | None:
+        """How long since ANOTHER session was actually injected. None = never.
+
+        There is now more than one way for state to reach an agent: the Claude
+        Code hook, and — for clients that have no hook — a resource-updated
+        notification. Both read this same engine, so both can announce the same
+        fact, and an agent told twice has no way to know it was one event.
+
+        This is the seam that lets the second channel stand down while the
+        first is demonstrably working. Deliberately coarse: it answers "is
+        another channel actively delivering right now", not "was this exact
+        signal delivered". Being coarse can only cost a nudge that another
+        channel is already giving; being clever here could drop a signal
+        neither channel delivers, which is the failure that matters.
+        """
+        now = _now_ms()
+        best = None
+        with self._lock:
+            for other, s in self._sessions.items():
+                if other == sid:
+                    continue
+                last = max(s["last_tier_ms"].values(), default=None)
+                if last and (best is None or last > best):
+                    best = last
+        return None if best is None else (now - best)
+
     def stop_blocks(self, sid: str) -> int:
         with self._lock:
             return self._sess(sid)["stop_blocks"]
@@ -219,6 +245,30 @@ def _fp(*parts) -> str:
     """Stable short fingerprint for a signal, so a repeat can be suppressed."""
     h = hashlib.sha1("|".join(str(p) for p in parts).encode("utf-8", "replace"))
     return h.hexdigest()[:12]
+
+
+def content_fp(tier: str, used: list | None, state: dict) -> str:
+    """A fingerprint of WHAT an injection is about, not of how it reads.
+
+    THE BUG THIS EXISTS FOR. A second push channel (MCP resource-updated
+    notifications) needs to answer "is this the same thing I already
+    announced?". Hashing the rendered `text` looked obvious and was wrong: the
+    raw block embeds a live clock — "LAST WRITE 144s AGO" — so the hash changed
+    on every poll and the channel re-announced identical content every few
+    seconds. Measured: 2 announcements in 5 seconds for one unchanged log.
+    An ambient channel that chatters is worse than no channel, so identity has
+    to come from the signals and the actual log bytes, never the prose.
+    """
+    parts: list = [tier]
+    parts += sorted(str(s.get("fp") or "") for s in (used or []))
+    for s in ((state.get("raw_log") or {}).get("sources") or []):
+        lines = s.get("lines") or []
+        if not lines:
+            continue
+        parts.append(str(s.get("label") or s.get("path") or ""))
+        parts.append(_fp(*[str(ln.get("line") if isinstance(ln, dict) else ln)
+                           for ln in lines]))
+    return _fp(*parts)
 
 
 def build_signals(state: dict) -> list[dict]:
@@ -868,6 +918,7 @@ def decide(state: dict, session_id: str = "default", event: str = "manual",
                     "est_tokens": (n + 3) // 4,
                     "signals_considered": len(signals), "signals_used": 0,
                     "signal_kinds": ["raw_log"], "offered_seqs": [],
+                    "content_fp": content_fp("raw", [], state),
                     "suppressed": suppressed,
                     "reason": "no AgentVision signal, but the program logged new "
                               "lines — raw output is never withheld",
@@ -943,6 +994,10 @@ def decide(state: dict, session_id: str = "default", event: str = "manual",
         "est_tokens": (n + 3) // 4,
         "signals_considered": len(signals), "signals_used": len(used),
         "signal_kinds": [s["kind"] for s in used],
+        # Stable identity of WHAT this says, for a second channel deciding
+        # whether it has already announced it. Never hash `text`: it contains a
+        # live clock.
+        "content_fp": content_fp(tier, used, state),
         # Frame seqs this injection actually NAMED to the agent. Only from
         # `used`, which is what render() puts in the text — a seq the agent was
         # never shown must not be recorded as offered.
