@@ -35,7 +35,7 @@ here is:
 
 > **AgentVision may not assert anything it did not verify.**
 
-That rule is not aspirational. It is enforced in code and in 57 test suites, most
+That rule is not aspirational. It is enforced in code and in 58 test suites, most
 of which exist because a specific version of this tool once said "healthy" while
 the program was failing.
 
@@ -146,7 +146,7 @@ find out by having something quietly not happen:
 python3 run_all_tests.py
 ```
 
-57 suites. They are worth reading as documentation of real failures: each one
+58 suites. They are worth reading as documentation of real failures: each one
 tends to encode a specific way this tool once misled its caller.
 
 One of them, `bridge_gate`, tests the first-connection contract and so needs a

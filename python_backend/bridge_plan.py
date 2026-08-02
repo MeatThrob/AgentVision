@@ -1,8 +1,8 @@
 """
 The bridge is not built until the AGENT decides what to build.
 ================================================================================
-AgentVision is a toolbox, not a judge. It owns 655 log adapters, 9 binary source
-readers, 89 MCP tools and a per-language emitter/hook library — but it cannot
+AgentVision is a toolbox, not a judge. It owns 658 log adapters, 9 binary source
+readers, 90 MCP tools and a per-language emitter/hook library — but it cannot
 know which of those a given program needs, because that depends on what the code
 IS and what it DOES, and nothing in a directory listing tells you that.
 

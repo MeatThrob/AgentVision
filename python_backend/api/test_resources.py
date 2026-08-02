@@ -141,6 +141,15 @@ def main() -> int:
               "all" not in params, str(params))
         check("...and it still peeks", params.get("peek") == 1, str(params))
 
+        # from_offset=0 is a REAL offset (start of file), not the same as
+        # "no offset given". Absent -> whole tail (all=1); 0 -> read from byte 0.
+        # If 0 collapsed into absent it would still work by luck here, but the
+        # two are distinct requests and must be sent as such.
+        read("agentvision://log/raw?from_offset=0")
+        _, params = calls[0]
+        check("from_offset=0 is passed as offset 0, distinct from absent",
+              params.get("from_offset") == 0 and "all" not in params, str(params))
+
         # ── Bad parameters explain themselves and touch nothing ─────────────
         body = read("agentvision://frame/abc.json")
         check("a non-numeric frame sequence is an explained error",
@@ -156,6 +165,15 @@ def main() -> int:
         check("a non-numeric from_offset is refused, not silently ignored",
               "error" in body and "banana" in body["error"], str(body))
         check("...and no partial read is issued", calls == [], str(calls))
+
+        # A NEGATIVE offset would make the bridge seek() before the start of the
+        # file, fail, and drop that source — an empty log indistinguishable from
+        # a program gone quiet. It must be refused, not silently honoured.
+        body = read("agentvision://log/raw?from_offset=-5")
+        check("a negative from_offset is refused, not silently emptied",
+              "error" in body and "-5" in body["error"], str(body))
+        check("...and issues no read that could vanish a source",
+              calls == [], str(calls))
 
         body = read("agentvision://incident/")
         check("an empty incident id says how to find a real one",

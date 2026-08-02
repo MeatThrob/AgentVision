@@ -133,7 +133,7 @@ shutter** — so it pairs exactly with the screenshot.
 ## 2. The unified event
 
 One JSON object per normalized log line, from any language/format (see
-`docs/LOG_ADAPTERS.md` for the 41 adapters). Shape:
+`docs/LOG_ADAPTERS.md` for the 658 adapters). Shape:
 
 ```json
 {

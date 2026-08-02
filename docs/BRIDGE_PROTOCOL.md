@@ -76,7 +76,7 @@ Only two operations are gated. Everything else works in both states.
 | `av_install_project(...)` | **REFUSED** | allowed |
 | `av_bridge_status`, `av_bridge_catalog` | allowed | allowed |
 | `av_bridge_commit` | performs the build | no-op unless `replan=True` |
-| every other one of the 89 MCP tools | allowed | allowed |
+| every other one of the 90 MCP tools | allowed | allowed |
 
 Source of truth: `bridge_server.py` line 3261 (`/capture/start`) and line 3534
 (`/install`) are the only two places that call `bridge_plan.is_sealed()` as a
@@ -204,7 +204,7 @@ source files (bounded: 400 files max, 400 KB per file, skipping `.git`,
 | `program` | string | Which target this catalog describes. |
 | `language_detected` | string | The **profile's** declared language, lowercased, or `"unknown"`. This is what gates `emitters_available`. Not the file scan — see the warning in 4.3. |
 | `emitters_available` | list of objects | The menu you pick `plan.emitters` from. See 4.2. |
-| `adapters` | object | `{total, families: {family: count}, drill_in, note}`. Adapters PARSE logs that already exist. Use `av_list_adapters(family=..., q=...)` for names. Live count at time of writing: 655. |
+| `adapters` | object | `{total, families: {family: count}, drill_in, note}`. Adapters PARSE logs that already exist. Use `av_list_adapters(family=..., q=...)` for names. Live count at time of writing: 658. |
 | `source_readers` | list of strings | Binary log readers. Currently: `docker_json`, `faillock`, `lastlog`, `mrt`, `netflow_v5`, `pcap`, `unified2`, `utmp`, `wtmpdb`. |
 | `mcp_tool_groups` | object | 19 groups. Each is `{tools: [...], relevant_here: N, ruled_out: N}`. Pick `plan.tools.primary` from here. See 4.4. |
 | `existing_logs_found` | list of objects | Every log this program has: `{label, path, declared, exists, bytes}`. `declared: true` = the profile already reads it. `declared: false` = **found on disk in the project and NOT read yet**; those entries also carry `detected_adapter`, `covered`, `sample`, and (when `covered` is false) `coverage_warning` + a copy-paste `how_to_add_an_adapter` body. **An undeclared log is only read if you pin it in `plan.adapters` — see 5.3.** |

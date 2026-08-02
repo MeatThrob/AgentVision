@@ -117,6 +117,9 @@ SUITES = [
     # The one thing here that runs without an agent asking it to. Its failure
     # modes are chatter, replay, and double-reporting — all of them invisible.
     ("push_channel",  "python_backend/api/test_push_channel.py",      False),
+    # Counts written in prose rot. Thirteen false statements were found in the
+    # published tree by grepping after the fact; this makes the suite find them.
+    ("doc_counts",    "python_backend/api/test_doc_counts.py",        False),
     # `agentvision run -- <cmd>` is the documented front door; it once
     # instrumented the wrong project silently.
     ("run_front_door", "python_backend/test_run_front_door.py",       False),

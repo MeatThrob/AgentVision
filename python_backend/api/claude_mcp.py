@@ -1961,7 +1961,7 @@ def av_bridge_status() -> dict:
     A program AgentVision has never seen starts PROVISIONAL: capture and emitter
     installation are REFUSED until you review the catalog and commit a plan.
 
-    This is deliberate. AgentVision owns 655 log adapters, 9 binary readers, 89
+    This is deliberate. AgentVision owns 658 log adapters, 9 binary readers, 90
     tools and a per-language emitter library — but it cannot know which of those a
     program needs, because that depends on what the code IS and DOES. Left to
     itself it scaffolds the same fixed set for a web server and a GPU emulator and
@@ -1981,7 +1981,7 @@ async def av_bridge_catalog(ctx: Context = None) -> dict:
 
     Read this before building a bridge on a new program. It lists:
       emitters_available   what logging can be ADDED, what each captures, its cost
-      adapters             655 parsers grouped by family (drill in with
+      adapters             658 parsers grouped by family (drill in with
                            av_list_adapters) — these READ logs that already exist
       source_readers       binary formats (utmp, pcap, netflow, …)
       mcp_tool_groups      all 90 tools in 19 groups, each entry carrying what
@@ -2668,10 +2668,22 @@ def _res_log_raw(from_offset: str = "") -> str:
     off = str(from_offset or "").strip()
     if off:
         try:
-            params["from_offset"] = int(off)
+            n = int(off)
         except ValueError:
             return json.dumps({"error": f"from_offset must be an integer byte "
                                         f"offset, got {from_offset!r}"}, indent=2)
+        # A negative offset is refused, not quietly honoured. The bridge would
+        # seek() past the start of the file, fail, and DROP that source from the
+        # result — an empty log that looks exactly like a program gone quiet,
+        # which is the confident silence this whole project exists to prevent.
+        # av_log_raw guards this too (its `from_offset >= 0`); the resource must
+        # not be the weaker door.
+        if n < 0:
+            return json.dumps({"error": f"from_offset must be a non-negative "
+                                        f"byte offset, got {n}",
+                               "hint": "omit from_offset to read the whole "
+                                       "retained tail"}, indent=2)
+        params["from_offset"] = n
     else:
         params["all"] = 1
     return json.dumps(_http_get("/log/raw", params), indent=2)

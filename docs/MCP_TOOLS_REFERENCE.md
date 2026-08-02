@@ -97,7 +97,7 @@ program kinds: gui, headless, cli, service, game, library
 
 **Not for:** Read-only planning aid, not a build step (no bridge is created by calling this) and not a status check on an already-built program (see av_bridge_report for what is actually installed). code_evidence is bounded and can miss signals in repos over 400 matched files, files bigger than 400KB, or code living entirely under a skipped directory name (node_modules, vendor, dist, build, target, obj, bin, site-packages, .venv, venv, .tox, .idea, .vscode, agentvision).
 
-> ⚠ **Caveat (from the code):** The bridge_plan.py module docstring advertises round numbers ('650+ log adapters, 9 binary source readers, ~86 MCP tools') but the catalog body itself reports live counts (adapters.total from len(la.REGISTRY), source_readers from log_sources.list_readers(), mcp_tool_groups from _tool_catalog_groups()) — no contradiction found in the actual JSON returned, just be aware the prose numbers elsewhere in the codebase are illustrative, not sourced from this call.
+> ⚠ **Caveat (from the code):** The catalog body reports LIVE counts (adapters from len(la.REGISTRY) and la.builtin_names(), source_readers from log_sources.list_readers(), mcp_tool_groups from _tool_catalog_groups()), so what this call returns is always current. Prose counts written into docstrings and .md files are NOT sourced from this call and have drifted before — this caveat itself used to quote a bridge_plan.py docstring that said '650+ log adapters, ~86 MCP tools', wording that no longer exists. When a number matters, take it from this response or av_capabilities(), never from prose. api/test_doc_counts.py now fails the suite when tracked prose disagrees with the registry.
 
 ### `av_bridge_commit`
 

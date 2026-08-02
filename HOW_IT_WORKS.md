@@ -110,7 +110,7 @@ AgentVision what to watch:
 
 AgentVision is a **two-sided bridge**:
 
-- **INPUT side** (built into AgentVision): it *reads* logs — the 41-adapter
+- **INPUT side** (built into AgentVision): it *reads* logs — the 658-adapter
   registry + multi-source merge + the MCP tools. See `docs/LOG_ADAPTERS.md`.
 - **OUTPUT side** (auto-installed on first attach, for ANY language): it makes
   the target program *write* those logs. `agentvision attach <dir>` (or the
@@ -183,7 +183,7 @@ full range, then apply it with `av_capture_set_interval(interval = 1/fps)`.
 A profile can list N `log_sources`, each in a **different format/language**, all
 auto-detected (`python_backend/connectors/log_adapters.py`), normalized into the
 one unified JSON event schema, and merged onto the single time-aligned timeline
-(`av_log_normalized`). **41 adapters ship today:** JSON-lines (pino/winston/
+(`av_log_normalized`). **658 adapters ship today.** A sample of the families: JSON-lines (pino/winston/
 bunyan/zap-json/structlog/AV-native), Java Log4j/SLF4J, Rust `env_logger`/
 `tracing`, .NET Serilog+MEL, **SharpEmu** (`[HH:mm:ss.fff] [LEVEL] [Cat] file:line
 msg`), syslog RFC5424/3164, systemd journal, Android logcat, k8s klog/glog, Go
@@ -208,7 +208,9 @@ stream line up exactly even when the box isn't on UTC.
 
 ---
 
-## 5. The MCP tool surface (≈44 tools, grouped)
+## 5. The MCP tool surface — 90 tools in 19 groups
+
+A selection below; `docs/MCP_TOOLS_REFERENCE.md` is generated from the code and lists all 90.
 
 **Observe the live program**
 `av_status`, `av_overview`, `av_program_status`, `av_capture_status`,

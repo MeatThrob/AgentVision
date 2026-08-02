@@ -276,7 +276,7 @@ Two traps in this response:
 - `adapter` echoes the **configured name without checking that it exists**. A
   typo shows up here as if it were in use, while parsing silently falls to `raw`.
   Step 1's `data.adapter` is what disproves it.
-- The response also carries `available_adapters` — all 655 entries, about
+- The response also carries `available_adapters` — all 658 entries, about
   29 KB (~7k tokens). Call it when you need it; do not call it in a loop.
 
 ### Step 3 — Ask who claims one line, and who else wanted it

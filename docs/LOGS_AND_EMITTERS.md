@@ -723,7 +723,7 @@ Steps:
 | `agent_bootstrap/av_runtime.py` | The python in-process hooks and the record writer. |
 | `python_backend/cli.py` | `agentvision run` — the wrapper/tee (`cmd_run`). |
 | `python_backend/connectors/log_sources.py` | Source resolution, readers, raw + normalized reads. |
-| `python_backend/connectors/log_adapters.py` | The 655-adapter registry and the detector. |
+| `python_backend/connectors/log_adapters.py` | The 658-adapter registry and the detector. |
 | `python_backend/api/bridge_server.py` | Routes: `/start_here`, `/bridge/status`, `/bridge/catalog`, `/bridge/commit`, `/bridge/report`, `/capture/start`, `/log/raw`, `/log/normalized`. |
 | `python_backend/api/claude_mcp.py` | The MCP tools and the server instructions. |
 | `python_backend/api/tool_meta.json` | Per-tool metadata: what it returns, `needs`, cost. 90 tools. |
