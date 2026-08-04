@@ -2507,8 +2507,12 @@ class AgentVisionApp(tk.Tk):
     def _parse_action_lines(self, profile: "ProgramProfile") -> list[str]:
         """Read actions.jsonl and format each record as a readable line.
         Returns a list of formatted strings — never mixed with bot log."""
-        action_path = (Path(profile.action_log_file)
-                       if getattr(profile, "action_log_file", "") else None)
+        # Shared resolver: modern-bridged profiles keep the JSONL sink in
+        # log_sources, not action_log_file — reading only the legacy field
+        # left this pane permanently empty for them.
+        from connectors.program_connector import resolve_action_log_path
+        _p = resolve_action_log_path(profile)
+        action_path = Path(_p) if _p else None
         if not action_path or not action_path.exists():
             return []
 
@@ -3589,9 +3593,13 @@ class AgentVisionApp(tk.Tk):
             return
         on = bool(getattr(prof, "capture_user_input", False))
         try:
+            # Same resolution the daemon uses — the legacy field is empty on
+            # modern-bridged profiles and displayed "sink: " for a daemon that
+            # was in fact writing to the log_sources events sink.
+            from connectors.program_connector import resolve_action_log_path
             self._cap_active_lbl.config(
                 text=f"Active project: {prof.display_name}  "
-                     f"→ sink: {prof.action_log_file}")
+                     f"→ sink: {resolve_action_log_path(prof) or '(none)'}")
             if on:
                 self._cap_state_lbl.config(
                     text="● Physical INCLUDED (recording you too)",

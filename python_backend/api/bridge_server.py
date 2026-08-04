@@ -32,7 +32,7 @@ from modules.failure_explainer import run_tests
 from modules.codebase_map import build_map
 from connectors.program_connector import (
     ProgramProfile, load_profiles, save_profiles, BUILTIN_PROFILES,
-    profile_output_folder
+    profile_output_folder, resolve_action_log_path
 )
 from connectors import log_sources as _log_sources
 from connectors import log_adapters as _log_adapters
@@ -792,7 +792,15 @@ class AutoCaptureEngine:
             self.last_warning += " (AGENTVISION_ALLOW_FULLSCREEN_FALLBACK=1 set)"
 
         # ── Shutter: stamp time AND snapshot log offsets together ───────────
-        action_log_path = getattr(collector.profile, "action_log_file", "") or ""
+        # Resolved with the SAME rule as _active_action_log_path: on a
+        # modern-bridged profile the JSONL sink lives in log_sources and
+        # `action_log_file` is empty, so the old one-field read pinned
+        # profile_action_log="" and action_log_offset=0 on every frame — and a
+        # 0 offset means "no cap" to the readers, so records written AFTER the
+        # shutter were served as this frame's context. That silently voids the
+        # frame↔log alignment guarantee (and av_frame_alignment then reports
+        # phantom leaks for frames that were captured perfectly).
+        action_log_path = resolve_action_log_path(collector.profile)
         log_path        = getattr(collector.profile, "log_file", "") or ""
         capture_iso, capture_ms = clock.now()
         offsets = {
@@ -2209,24 +2217,13 @@ def _active_action_log_path() -> str:
     """
     profiles = load_profiles()
     p = profiles.get(_active_profile_name) or BUILTIN_PROFILES.get(_active_profile_name)
-    if not p:
-        return ""
-    explicit = (getattr(p, "action_log_file", "") or "").strip()
-    if explicit:
-        return explicit
-    srcs = getattr(p, "log_sources", None) or []
-    jsonl = [s for s in srcs
-             if isinstance(s, dict)
-             and (str(s.get("adapter") or "").lower() == "jsonl"
-                  or str(s.get("path") or "").lower().endswith(".jsonl"))]
-    if not jsonl:
-        return ""
-    # `events` is the label the installer gives the emitter's own sink, so it is
-    # the one carrying av.bootstrap.* records. Prefer it when several qualify.
-    for s in jsonl:
-        if str(s.get("label") or "").lower() == "events":
-            return os.path.expanduser(str(s.get("path") or ""))
-    return os.path.expanduser(str(jsonl[0].get("path") or ""))
+    # The resolution itself lives in connectors.program_connector
+    # .resolve_action_log_path, because the identical one-field read was ALSO
+    # sitting in the capture shutter, the input daemon and the GUI panes —
+    # fixing only this function left frames pinning profile_action_log="" with
+    # action_log_offset=0, i.e. the read side healed while the capture side
+    # kept producing unbounded, unpinned frames.
+    return resolve_action_log_path(p) if p else ""
 
 
 def _read_action_jsonl(window: tuple[float, float] | None = None,
@@ -2805,38 +2802,72 @@ def _handled_exceptions(limit: int = 2000) -> dict:
 
     So: a third state, like the OCR tri-state. Not "failed", not "clean" —
     "handled, and here is where".
+
+    SCOPED TO THE NEWEST RUN. A log survives across runs, and "what did THIS
+    run swallow?" is the question being answered. The first version used the
+    newest summary in the whole read window, which asserted a PREVIOUS run's
+    swallows as current in two ways: mid-run (run 2 swallowing, no summary yet
+    -> run 1's summary reported, wrong sites and all) and post-fix (run 2
+    clean, run 1's summary still reported — the exact stale-verdict trap the
+    corrections signal exists for). Every emitter record carries run_id, so
+    the newest run is read off the log, not assumed. Reads are filtered to
+    av.bootstrap.* BEFORE the limit is applied, so a chatty program cannot
+    evict the swallow records out of the window.
     """
-    recs = _read_action_jsonl(limit=limit)
+    boot = _read_action_jsonl(source_substr="av.bootstrap.", limit=limit)
+    current_run = None
+    for r in reversed(boot):
+        if r.get("run_id"):
+            current_run = r.get("run_id")
+            break
     live: list[dict] = []
     summaries: list[dict] = []
-    for r in recs:
+    older_swallows = 0
+    for r in boot:
         src = (r.get("source") or "")
         if not src.endswith(("bootstrap.swallowed", "bootstrap.swallowed_summary")):
             continue
+        if current_run is not None and r.get("run_id") \
+                and r.get("run_id") != current_run:
+            older_swallows += 1
+            continue
         (summaries if src.endswith("_summary") else live).append(r)
 
-    # The summary is emitted once per run and carries the authoritative totals
-    # (the live records are de-duplicated, so counting them undercounts). Use
-    # the NEWEST summary; older ones belong to earlier runs.
     sites: list[dict] = []
     total = 0
     if summaries:
+        # The run's exit summary carries the authoritative totals (the live
+        # records are de-duplicated, so counting them undercounts).
         d = summaries[-1].get("data") or {}
         total = int(d.get("total_occurrences") or 0)
         sites = list(d.get("sites") or [])
+        counted_from = "swallowed_summary"
     else:
-        total = len(live)
+        # No summary yet: the run has not exited. The live records are emitted
+        # on a decaying schedule (occurrence 1, 10, 100, ...), each carrying
+        # the count AT EMISSION — so per site the NEWEST count is the best
+        # known, and summing records instead of sites both overcounts the
+        # sites (3 records = 1 site) and undercounts the occurrences.
+        by_site: dict[tuple, dict] = {}
         for r in live:
             d = r.get("data") or {}
-            sites.append({"type": d.get("type") or d.get("exception_type"),
-                          "raised_at": d.get("raised_at"),
-                          "handled_in": d.get("handled_in"),
-                          "occurrences": d.get("occurrences") or 1})
-    return {
+            key = (d.get("type") or d.get("exception_type"), d.get("raised_at"))
+            n = int(d.get("occurrences") or 1)
+            cur = by_site.get(key)
+            if cur is None or n > cur["occurrences"]:
+                by_site[key] = {"type": key[0], "raised_at": key[1],
+                                "handled_in": d.get("handled_in"),
+                                "occurrences": n}
+        sites = sorted(by_site.values(), key=lambda s: -s["occurrences"])
+        total = sum(s["occurrences"] for s in sites)
+        counted_from = ("live records only — the run has not exited, and live "
+                        "records are de-duplicated, so these totals are "
+                        "at-emission lower bounds")
+    out = {
         "total_occurrences": total,
         "distinct_sites": len(sites),
         "sites": sites[:20],
-        "counted_from": "swallowed_summary" if summaries else "live records only",
+        "counted_from": counted_from,
         "what_this_is": (
             "exceptions the program raised and swallowed without logging. NOT "
             "counted as failures — the program handled them, and catching is "
@@ -2844,6 +2875,15 @@ def _handled_exceptions(limit: int = 2000) -> dict:
             "so if a run reported success while doing less work than expected, "
             "this is where to look first."),
     }
+    if current_run is not None:
+        out["run_id"] = current_run
+    if older_swallows:
+        # Say what was left out and why, rather than silently narrowing.
+        out["earlier_runs"] = (
+            f"{older_swallows} swallowed-exception record(s) from EARLIER runs "
+            f"were excluded — this reports only the newest run "
+            f"({current_run!r}). av_log_raw() still shows the history.")
+    return out
 
 
 def _detect_failure_records(limit: int = 200) -> list[dict]:
@@ -3168,7 +3208,18 @@ def anomalies_new():
 #: still matters for two reasons: logs written by earlier versions are already
 #: contaminated on disk, and a bridged program is free to declare AgentVision's
 #: own observer file as one of its sources.
-_AV_SELF_EMITTERS = ("agentvision",)
+#: Source prefixes that are AgentVision's OWN machinery, not the program.
+#: "agentvision" is the old watchdog (see _newest_program_record_ms for the
+#: 48.8-hours-dead incident). "av.wrapper." is the run wrapper's file watcher
+#: and lifecycle notes — and it MUST be here because the bridge writes frame
+#: PNGs into the project's agentvision/ folder, the wrapper dutifully reports
+#: each one as file.create/file.modify, and those records then kept the
+#: "newest program record" clock ticking: AgentVision's own shutter was
+#: certifying the program as current. Measured on a tkinter target: 140
+#: records in one frame's context, ~120 of them av.wrapper.* noise, and
+#: records_self_emitted said 0. av.bootstrap.* stays PROGRAM evidence on
+#: purpose — the tee re-emits the program's own stdout/stderr/logging.
+_AV_SELF_EMITTERS = ("agentvision", "av.wrapper.")
 
 #: How far a source's newest PROGRAM-emitted record may lag the reference clock
 #: before the source is called stale. 120 s is well beyond any capture cadence.
@@ -4982,7 +5033,14 @@ def create_or_update_profile():
     # profile. Measured on a cold run through the MCP client.
     if not str(data.get("display_name") or "").strip():
         data = dict(data)
-        data["display_name"] = name
+        if name == "custom":
+            # The shipped placeholder is the one profile whose display_name
+            # ("Custom Program") is CORRECT and is not the profile name — an
+            # update that omits display_name must not rename it to "custom".
+            # Dropping the key lets the dataclass default hold.
+            data.pop("display_name", None)
+        else:
+            data["display_name"] = name
     profiles[name] = ProgramProfile.from_dict(data)
     try:
         save_profiles(profiles)
@@ -6071,7 +6129,11 @@ def daemon_status():
             profiles = load_profiles()
             prof = profiles.get(name)
             if prof:
-                info["active_sink"] = prof.action_log_file
+                # Same resolution as the daemon itself now performs: a
+                # modern-bridged profile keeps its sink in log_sources, and
+                # reporting the empty legacy field here said "no sink" about a
+                # daemon that was writing happily.
+                info["active_sink"] = resolve_action_log_path(prof)
                 info["capture_user_input"] = bool(
                     getattr(prof, "capture_user_input", False))
     except Exception as e:
@@ -6966,7 +7028,12 @@ def diagnose():
         "active_profile": _active_profile_name,
         "health": health,
         "hypotheses": hypotheses,
-        "top_signals": top_signals[:8],
+        # The cap must hold every signal the builders above can emit at once
+        # (currently 10: 8 appends + the two insert(0) prepends). At 8, the
+        # handled-exception and text-failure prepends silently pushed the LAST
+        # two signals off the list — dropping a distinct signal to make room
+        # for another is exactly the ranking this project forbids.
+        "top_signals": top_signals[:12],
         "log_sources_freshness": _fresh,
         "log_source_event_map": _smap,
         "recovery": _recov,

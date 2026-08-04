@@ -289,6 +289,104 @@ def main() -> int:
         check("...and /log/range returns the emitter's own records",
               any(str(s).startswith("av.bootstrap.") for s in srcs),
               str(sorted(s for s in srcs if s))[:160])
+
+        # ── 4. RUNS ARE NOT INTERCHANGEABLE ─────────────────────────────────
+        # A log survives across runs. The first version of _handled_exceptions
+        # used the newest summary in the whole window, which reported a
+        # PREVIOUS run's swallows as the current run's — mid-run (no summary
+        # yet) and after a fix (clean run 2, stale run-1 summary). Every
+        # scenario below rewrites the log wholesale so they stay independent.
+        def _rewrite(recs: list[dict]) -> None:
+            jsonl.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+
+        run1 = _emitter_records(now)   # run av-test-1: 2 swallows + summary
+
+        # (a) run 2 in progress, its OWN swallow, no summary yet. Two live
+        # records for ONE site (occurrence 1, then 10 — the emitter's decaying
+        # schedule): per-site max, not per-record sum.
+        run2_live = [
+            {"ts": "2026-08-04T19:19:00.000Z", "ts_ms": now + 1000,
+             "category": "process", "source": "av.bootstrap.start",
+             "run_id": "av-test-2", "data": {"pid": 4243}},
+            {"ts": "2026-08-04T19:19:00.100Z", "ts_ms": now + 1100,
+             "category": "warn", "source": "av.bootstrap.swallowed",
+             "run_id": "av-test-2", "data": {
+                 "message": "TypeError raised and silently handled",
+                 "type": "TypeError", "raised_at": "other.py:5",
+                 "handled_in": "other.py:main", "occurrences": 1}},
+            {"ts": "2026-08-04T19:19:00.200Z", "ts_ms": now + 1200,
+             "category": "warn", "source": "av.bootstrap.swallowed",
+             "run_id": "av-test-2", "data": {
+                 "message": "TypeError raised and silently handled",
+                 "type": "TypeError", "raised_at": "other.py:5",
+                 "handled_in": "other.py:main", "occurrences": 10}},
+        ]
+        _rewrite(run1 + run2_live)
+        he = bs._handled_exceptions()
+        check("mid-run: the CURRENT run's swallows are reported, not run 1's",
+              he["distinct_sites"] == 1
+              and he["sites"][0]["type"] == "TypeError", json.dumps(he)[:220])
+        check("...counted per-site at the newest emission (10), not per-record",
+              he["total_occurrences"] == 10, str(he["total_occurrences"]))
+        check("...and the excluded earlier run is DISCLOSED, not silent",
+              "EARLIER runs" in str(he.get("earlier_runs") or ""),
+              str(he.get("earlier_runs")))
+
+        # (b) run 2 finished clean — a stale run-1 summary must not be
+        # asserted as current.
+        run2_clean = [
+            {"ts": "2026-08-04T19:19:00.000Z", "ts_ms": now + 1000,
+             "category": "process", "source": "av.bootstrap.start",
+             "run_id": "av-test-2", "data": {"pid": 4243}},
+            {"ts": "2026-08-04T19:19:01.000Z", "ts_ms": now + 2000,
+             "category": "process", "source": "av.bootstrap.exit",
+             "run_id": "av-test-2", "data": {"pid": 4243}},
+        ]
+        _rewrite(run1 + run2_clean)
+        he = bs._handled_exceptions()
+        check("a clean newest run reports ZERO, not the previous run's summary",
+              he["total_occurrences"] == 0, json.dumps(he)[:220])
+
+        # (c) a chatty program must not push the swallow records out of the
+        # read window — the source filter applies before the limit.
+        filler = [{"ts": "2026-08-04T19:18:44.000Z", "ts_ms": now - 40,
+                   "category": "log", "source": "app.chatter",
+                   "run_id": "av-test-1", "data": {"message": f"line {i}"}}
+                  for i in range(2500)]
+        _rewrite(run1 + filler)
+        he = bs._handled_exceptions()
+        check("2500 unrelated records cannot evict the swallow evidence",
+              he["total_occurrences"] == 2, str(he["total_occurrences"]))
+
+        _rewrite(run1)   # canonical single-run shape again
+
+        # ── 5. THE RESOLVER IS SHARED, INCLUDING BY THE CAPTURE SHUTTER ─────
+        # The read side was fixed in _active_action_log_path, but the SAME
+        # one-field read sat at the capture shutter (offsets + per-frame pin),
+        # in the input daemon and in the GUI panes. The rule lives in ONE
+        # function accepting a profile object or a raw dict; a frame captured
+        # under the modern profile shape must pin the real JSONL and a real
+        # byte offset, or "no record postdates the shutter" is unenforceable.
+        from connectors.program_connector import resolve_action_log_path
+        check("the resolver answers for a ProgramProfile object",
+              resolve_action_log_path(ProgramProfile(**MODERN)) == str(jsonl),
+              resolve_action_log_path(ProgramProfile(**MODERN)))
+        check("...and for the raw dict the input daemon reads",
+              resolve_action_log_path(dict(MODERN)) == str(jsonl),
+              resolve_action_log_path(dict(MODERN)))
+        check("an events entry with an EMPTY path cannot mask a valid sibling",
+              resolve_action_log_path(dict(MODERN, log_sources=[
+                  {"path": "", "adapter": "jsonl", "label": "events"},
+                  {"path": str(jsonl), "adapter": "jsonl", "label": "other"},
+              ])) == str(jsonl), "masked")
+        check("log_sources that is not a list resolves to nothing, not a crash",
+              resolve_action_log_path(dict(MODERN, log_sources="oops")) == "",
+              "non-list accepted")
+        check("~ in a source path is expanded",
+              resolve_action_log_path(dict(MODERN, log_sources=[
+                  {"path": "~/av_alw_home.jsonl", "adapter": "jsonl",
+                   "label": "events"}]))
+              == os.path.expanduser("~/av_alw_home.jsonl"), "not expanded")
     finally:
         save_profiles(keep)
         bs._active_profile_name = _prev_name

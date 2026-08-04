@@ -340,8 +340,12 @@ class ContextCollector:
         # Snapshotted profile + offsets — pin THIS frame to the file paths
         # and byte positions that were authoritative at capture time. Survives
         # profile switches and file growth without losing alignment.
+        # Fallback resolves like everything else now does (log_sources events
+        # sink when the legacy field is empty) — otherwise legacy callers that
+        # pass no offsets pinned "" for every modern-bridged profile.
+        from connectors.program_connector import resolve_action_log_path
         frame.profile_action_log = (offsets or {}).get("_action_log_path") or \
-                                   getattr(self.profile, "action_log_file", "")
+                                   resolve_action_log_path(self.profile)
         frame.action_log_offset  = (offsets or {}).get("action_log_offset", 0)
         frame.log_offset         = (offsets or {}).get("log_offset", 0)
         # Capture + time-alignment metadata (from the bridge). Backfill the

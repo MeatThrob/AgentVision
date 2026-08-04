@@ -137,7 +137,19 @@ def _refresh_target() -> None:
             data = json.loads(PROFILES_FILE.read_text())
             prof = data.get(name)
             if prof:
-                p = prof.get("action_log_file")
+                # ONE resolution rule, shared with the bridge: a modern-bridged
+                # profile keeps its JSONL sink in log_sources (label "events")
+                # and never sets action_log_file — reading only the legacy
+                # field left sink=None, and every input event (including the
+                # bot's synthetic ones, which are supposed to ALWAYS record)
+                # was silently dropped. Falls back to the raw field if the
+                # import fails, because this daemon must never die on a dep.
+                try:
+                    from connectors.program_connector import (
+                        resolve_action_log_path)
+                    p = resolve_action_log_path(prof)
+                except Exception:
+                    p = prof.get("action_log_file")
                 if p:
                     sp = Path(p)
                     try:

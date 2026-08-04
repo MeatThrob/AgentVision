@@ -90,6 +90,58 @@ BUILTIN_PROFILES: dict[str, ProgramProfile] = {
 }
 
 
+def resolve_action_log_path(profile) -> str:
+    """The profile's structured JSONL event log — ONE resolution rule for every
+    consumer.
+
+    Explicit `action_log_file` wins (older profiles and per-frame pins depend
+    on it). Otherwise the JSONL source the bridge installer actually wired:
+    `av_bridge_commit` registers the emitter sinks as log_sources
+    `[{path: .../agentvision/actions.jsonl, adapter: jsonl, label: events},
+    ...]` and never sets `action_log_file`, so every reader that looked only at
+    the legacy field returned nothing on every modern-bridged profile (the
+    measured incident is documented on bridge_server._active_action_log_path).
+    The same one-field read also lived in the capture shutter, the input
+    daemon and the GUI panes — this function exists so the rule cannot drift
+    apart again.
+
+    A non-JSONL source is never substituted: a text log handed to a JSONL
+    reader parses zero records, which is the same silence in a different hat.
+    Among several JSONL sources the `events` label wins — it is the label the
+    installer gives the emitter's own sink, so it is the one carrying
+    av.bootstrap.* records.
+
+    Accepts a ProgramProfile or the same fields as a plain dict (the input
+    daemon reads profiles.json raw)."""
+    if profile is None:
+        return ""
+    if isinstance(profile, dict):
+        _get = profile.get
+    else:
+        def _get(k, d=None):
+            return getattr(profile, k, d)
+    explicit = str(_get("action_log_file") or "").strip()
+    if explicit:
+        return os.path.expanduser(explicit)
+    srcs = _get("log_sources") or []
+    if not isinstance(srcs, list):
+        return ""
+    jsonl = [s for s in srcs
+             if isinstance(s, dict)
+             # An entry with no path can never be read; without this test an
+             # events-labelled entry whose path is empty would win the label
+             # preference below and mask a valid JSONL sibling with "".
+             and str(s.get("path") or "").strip()
+             and (str(s.get("adapter") or "").lower() == "jsonl"
+                  or str(s.get("path") or "").lower().endswith(".jsonl"))]
+    if not jsonl:
+        return ""
+    for s in jsonl:
+        if str(s.get("label") or "").lower() == "events":
+            return os.path.expanduser(str(s.get("path")))
+    return os.path.expanduser(str(jsonl[0].get("path")))
+
+
 # ── Profile store ─────────────────────────────────────────────────────────────
 
 PROFILES_FILE = Path(__file__).parent.parent / "profiles.json"
@@ -230,6 +282,15 @@ _DEV_TOOL_MARKERS = (
 _AV_SELF_MARKERS = (
     "bridge_server.py", "claude_mcp.py", "agent_vision_gui.py",
     "input_daemon", "python_backend.cli", "agentvision_hook",
+    # The run wrapper by SCRIPT PATH — the invocation the README recommends
+    # (`python3 /path/to/AgentVision/python_backend/cli.py run -- ...`). Only
+    # the `-m python_backend.cli` module form was listed, so the wrapper's own
+    # process matched the profile (its argv carries the target script and its
+    # cwd is the project), the window lookup then received the WRAPPER's pid,
+    # and every frame was skipped for a window that was on screen. Measured
+    # end-to-end on a tkinter target. Path-anchored on purpose: a user
+    # project's own cli.py does not live under a folder named python_backend.
+    "python_backend/cli.py", "python_backend\\cli.py",
 )
 
 #: argv[0] basenames that READ OR VISIT files for a living. _DEV_TOOL_MARKERS
@@ -320,7 +381,10 @@ class ProgramDataReader:
         max_offset>0: only read bytes [..max_offset] (capture-time alignment).
         path_override: read this path instead of the active profile's (used when
         a frame was captured under a different profile and pinned its own path)."""
-        path_str = path_override or getattr(self.profile, "action_log_file", "") or ""
+        # Fallback goes through the shared resolver: modern-bridged profiles
+        # keep the JSONL sink in log_sources, and the legacy one-field read
+        # returned [] for them (legacy callers that pass no offsets/pin).
+        path_str = path_override or resolve_action_log_path(self.profile)
         if not path_str:
             return []
         path = Path(path_str)
@@ -796,9 +860,26 @@ class ProgramDataReader:
         w = platform_shim.find_window(self.profile.capture_app or "", pid=pid)
         if w:
             return w.get("wid")
-        # No window for THAT process. Falling back to a name-only search would
-        # reintroduce exactly the wrong-window bug, so report nothing instead:
-        # a skipped frame is honest, a photograph of someone else's window is not.
+        # The matched process may be a LAUNCHER — the run wrapper, a shell, an
+        # npm/gradle front — whose CHILD owns the actual window. A descendant
+        # of the matched process is still the strong identity (it is inside
+        # that process's own tree), so walk the children before giving up.
+        # This is NOT the forbidden name-only fallback: every candidate pid
+        # here is vouched for by the process the matcher identified.
+        if pid:
+            try:
+                kids = psutil.Process(pid).children(recursive=True)
+            except Exception:
+                kids = []
+            for k in kids:
+                w = platform_shim.find_window(self.profile.capture_app or "",
+                                              pid=k.pid)
+                if w:
+                    return w.get("wid")
+        # No window for that process or its tree. Falling back to a name-only
+        # search would reintroduce exactly the wrong-window bug, so report
+        # nothing instead: a skipped frame is honest, a photograph of someone
+        # else's window is not.
         return None
 
     def get_window_bounds(self) -> tuple[int, int, int, int] | None:

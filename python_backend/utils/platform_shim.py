@@ -289,12 +289,24 @@ def _find_window_mac(app_name: str, pid: int | None = None,
         for w in wlist:
             owner = (w.get("kCGWindowOwnerName") or "").lower()
             wpid = w.get("kCGWindowOwnerPID")
+            wname = (w.get("kCGWindowName") or "")
+            # capture_app is documented as "window title or process name", and
+            # for a Tk/Qt/SDL program the title is the only stable identity the
+            # user can see — the OWNER of every tkinter window is just
+            # "Python". Matching owner only meant a capture_app set to the
+            # window's actual title matched NOTHING unless the process matcher
+            # supplied a pid (measured: owner='Python', name='AV GUI Probe',
+            # find_window("AV GUI Probe") -> None while the window sat on
+            # screen and every frame was skipped).
+            name_title_hit = bool(app_name and wname
+                                  and app_name.lower() in wname.lower())
             if pid is not None:
                 # Strong identity: this window must belong to the process the
                 # matcher identified. Nothing else can shadow it.
                 if wpid != pid:
                     continue
-            elif not (cands and any(c in owner for c in cands)):
+            elif not ((cands and any(c in owner for c in cands))
+                      or name_title_hit):
                 continue
             if w.get("kCGWindowLayer", 1) != 0:
                 continue
@@ -320,7 +332,6 @@ def _find_window_mac(app_name: str, pid: int | None = None,
             wpx, hpx = int(b.get("Width", 0)), int(b.get("Height", 0))
             if wpx <= 1 or hpx <= 1:
                 continue                       # helper/measurement windows
-            wname = (w.get("kCGWindowName") or "")
             # Ranked, NOT filtered. Area alone picks the wrong window: a tkinter
             # process also owns a BLANK 500x500 off-screen helper (250,000 px)
             # that outscores the real 560x388 UI (217,280 px), and a 2560x24 menu
@@ -332,11 +343,13 @@ def _find_window_mac(app_name: str, pid: int | None = None,
             #   3 has a title at all               — real UI windows are titled;
             #     Tk's hidden root and helpers are not
             #   4 area                             — only as the final tiebreak
-            title_hit = 1 if (want_title and want_title in wname.lower()) else 0
+            title_hit = 1 if ((want_title and want_title in wname.lower())
+                              or name_title_hit) else 0
             score = (title_hit, 1 if onscreen else 0,
                      1 if wname.strip() else 0, wpx * hpx)
             if score > best_score:
                 best_score = score
+                owner_hit = bool(cands and any(c in owner for c in cands))
                 best = {
                     "wid": w.get("kCGWindowNumber"),
                     "x": int(b.get("X", 0)), "y": int(b.get("Y", 0)),
@@ -344,7 +357,9 @@ def _find_window_mac(app_name: str, pid: int | None = None,
                     "title": wname,
                     "owner": owner,
                     "pid": wpid,
-                    "matched_by": ("pid" if pid is not None else "owner-name")
+                    "matched_by": ("pid" if pid is not None else
+                                   "owner-name" if owner_hit else
+                                   "window-title")
                                   + ("+title" if title_hit else ""),
                 }
         return best
@@ -1169,37 +1184,114 @@ def capture_backend_name() -> str:
     return "mss"
 
 
+def mac_screen_recording_permission() -> bool | None:
+    """Ask the OS DIRECTLY whether this process may record the screen.
+
+    CGPreflightScreenCaptureAccess reads the TCC grant without prompting
+    (never CGRequestScreenCaptureAccess here — a doctor must not pop dialogs).
+    Returns True/False on macOS 10.15+, None when the answer is unavailable
+    (non-mac, or the symbol is missing). This exists because inferring
+    permission from image pixels cannot work: a permission-denied
+    `screencapture` returns the wallpaper (non-blank!), and a permitted grab
+    of a uniform screen region is blank — the pixels answer a different
+    question."""
+    if not IS_MAC:
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+        lib = ctypes.util.find_library("CoreGraphics")
+        if not lib:
+            return None
+        cg = ctypes.CDLL(lib)
+        fn = getattr(cg, "CGPreflightScreenCaptureAccess", None)
+        if fn is None:
+            return None                          # pre-10.15: not gated
+        fn.restype = ctypes.c_bool
+        return bool(fn())
+    except Exception:
+        return None
+
+
 def capture_selftest() -> dict:
-    """Grab a small screen region and confirm it is a real (non-blank) image.
+    """Grab a screen region and confirm it is a real (non-blank) image.
     Returns a JSON-able health record for `agentvision doctor`. Never raises;
-    reports the failure in `detail` instead."""
+    reports the failure in `detail` instead.
+
+    TWO FALSE VERDICTS THIS USED TO EMIT, both measured on a healthy machine:
+
+      * ok=False because the fixed 64x64 top-left crop happened to land on a
+        uniform patch (a full-screen video frame); the very next run passed.
+        A plain-wallpaper user would fail EVERY run. So a blank small region
+        escalates to a full-screen grab before any failure is declared.
+      * The failure text blamed "headless session, locked screen, or
+        capture-blocked surface" — while the actual macOS permission state
+        was readable from the OS and was GRANTED. The permission is now asked
+        directly (see mac_screen_recording_permission) and reported either
+        way, so a user can tell their setup apart from a capture defect.
+
+    On failure the sample image is KEPT and its path reported — the evidence
+    beats a description of it."""
     import tempfile
     out = {"check": "capture", "ok": False, "backend": capture_backend_name(),
            "detail": ""}
     if IS_LINUX:
         out["session"] = linux_session_type()
+    if IS_MAC:
+        perm = mac_screen_recording_permission()
+        if perm is not None:
+            out["screen_recording_permission"] = perm
     tmp = os.path.join(tempfile.gettempdir(),
                        f"av_capture_selftest_{os.getpid()}.png")
+    keep_evidence = False
     try:
-        # A fixed small crop of the top-left of the primary screen.
+        # A fixed small crop of the top-left of the primary screen first —
+        # cheap, and sufficient when it shows content.
         capture_frame(tmp, wid=None, crop=(0, 0, 64, 64))
         if IS_LINUX:
             out["backend"] = capture_backend_name()   # backend that really ran
         health = image_health(tmp)
+        if health.get("assessed") and health.get("is_blank", True):
+            # The corner being uniform proves nothing about capture. Only a
+            # full-screen grab that is ALSO uniform is worth failing on.
+            capture_frame(tmp, wid=None, crop=None)
+            health = image_health(tmp)
+            out["escalated_to_fullscreen"] = True
         out["image_health"] = health
         if not health.get("assessed"):
             out["detail"] = "captured, but Pillow unavailable to assess blankness"
             out["ok"] = os.path.exists(tmp) and os.path.getsize(tmp) > 0
         else:
             out["ok"] = not health.get("is_blank", True)
-            out["detail"] = ("captured a non-blank region" if out["ok"]
-                             else "captured region looks blank/black — a headless "
-                             "session, locked screen, or capture-blocked surface")
+            if out["ok"]:
+                out["detail"] = "captured a non-blank image"
+            else:
+                keep_evidence = True
+                out["sample_kept_at"] = tmp
+                bits = ["the FULL SCREEN capture is uniform — locked screen, "
+                        "headless session, capture-blocked surface, or a "
+                        "genuinely uniform display (look at sample_kept_at "
+                        "and judge for yourself)"]
+                if out.get("screen_recording_permission") is False:
+                    bits.insert(0, "macOS Screen Recording permission is NOT "
+                                   "granted to this process — grant it under "
+                                   "System Settings → Privacy & Security → "
+                                   "Screen Recording, then re-run. This is a "
+                                   "setup step, not an AgentVision defect")
+                elif out.get("screen_recording_permission") is True:
+                    bits.append("macOS Screen Recording permission IS granted, "
+                                "so this is not the permission")
+                out["detail"] = "; ".join(bits)
     except Exception as e:
         out["detail"] = f"capture failed: {e}"
+        if IS_MAC and out.get("screen_recording_permission") is False:
+            out["detail"] += (" — and macOS Screen Recording permission is NOT "
+                              "granted to this process (System Settings → "
+                              "Privacy & Security → Screen Recording); fix "
+                              "that first")
     finally:
         try:
-            if os.path.exists(tmp):
+            if os.path.exists(tmp) and not keep_evidence:
                 os.remove(tmp)
         except Exception:
             pass
