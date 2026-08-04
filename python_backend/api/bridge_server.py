@@ -2178,9 +2178,55 @@ def get_frame(seq: int):
 
 
 def _active_action_log_path() -> str:
+    """The program's structured JSONL event log.
+
+    THE BUG THIS SHAPE EXISTS FOR. This used to return `action_log_file` and
+    nothing else. But `av_bridge_commit` wires the emitter sinks it scaffolds as
+    **log_sources** — `[{path: .../agentvision/actions.jsonl, adapter: jsonl,
+    label: events}, ...]` — and never sets `action_log_file`. So on every
+    program bridged through the modern flow this returned "", and
+    `_read_action_jsonl` returned [] for all fourteen functions built on it.
+
+    Measured on a freshly bridged program whose emitter had just recorded two
+    silently-swallowed KeyErrors, with type, file:line, handling function and
+    occurrence count all present in actions.jsonl:
+
+        av_errors_by_fingerprint  ->  {"fingerprints": [], "total_failures": 0}
+        av_diagnose               ->  hypotheses: [], while its OWN
+                                      counts.distinct_error_fingerprints said 2
+        av_list_bookmarks         ->  []
+
+    Eleven MCP tools answering emptily about a log that was sitting on disk,
+    full of exactly the evidence they exist to surface — and an empty list reads
+    as "this program is fine". The flight recorder had the truth the whole time;
+    the analysis half was pointed at a field nobody sets.
+
+    So: explicit `action_log_file` still wins (older profiles and per-frame pins
+    depend on it), and otherwise the JSONL source the installer actually wired
+    is used. A non-JSONL source is never substituted — handing a text log to a
+    JSONL reader parses zero records, which is the same silence wearing a
+    different hat.
+    """
     profiles = load_profiles()
     p = profiles.get(_active_profile_name) or BUILTIN_PROFILES.get(_active_profile_name)
-    return getattr(p, "action_log_file", "") if p else ""
+    if not p:
+        return ""
+    explicit = (getattr(p, "action_log_file", "") or "").strip()
+    if explicit:
+        return explicit
+    srcs = getattr(p, "log_sources", None) or []
+    jsonl = [s for s in srcs
+             if isinstance(s, dict)
+             and (str(s.get("adapter") or "").lower() == "jsonl"
+                  or str(s.get("path") or "").lower().endswith(".jsonl"))]
+    if not jsonl:
+        return ""
+    # `events` is the label the installer gives the emitter's own sink, so it is
+    # the one carrying av.bootstrap.* records. Prefer it when several qualify.
+    for s in jsonl:
+        if str(s.get("label") or "").lower() == "events":
+            return os.path.expanduser(str(s.get("path") or ""))
+    return os.path.expanduser(str(jsonl[0].get("path") or ""))
 
 
 def _read_action_jsonl(window: tuple[float, float] | None = None,
@@ -2648,6 +2694,26 @@ def errors_by_fingerprint():
                 }
     except Exception:
         pass
+
+    # SWALLOWED EXCEPTIONS ARE THE OTHER WAY THIS LIST LIES BY BEING EMPTY.
+    # They are not failures and are not fingerprinted (see _handled_exceptions),
+    # but a caller asking "what is failing?" must not be told nothing while the
+    # emitter has two named, located, counted exceptions on disk.
+    try:
+        _he = _handled_exceptions()
+        if int(_he.get("total_occurrences") or 0) > 0:
+            out["handled_exceptions"] = _he
+            out["read_this"] = (
+                f"total_failures is {out['total_failures']}, and that is "
+                f"accurate — but {_he['total_occurrences']} exception(s) were "
+                f"raised and SILENTLY HANDLED at "
+                f"{_he['distinct_sites']} site(s). Those are reported under "
+                f"`handled_exceptions`, not as failures, because the program "
+                f"caught them. If it reported success while doing less work "
+                f"than expected, start there.")
+    except Exception as exc:
+        # Never silent: a disclosure that fails must say it failed.
+        out["handled_exceptions_unavailable"] = f"{type(exc).__name__}: {exc}"
     return jsonify(out), 200
 
 
@@ -2716,6 +2782,68 @@ _SRC_FAILWORD = re.compile(
 #: An explicit benign level from the program outranks a guess made from a module
 #: name: if the emitter says INFO, a module called `app.error` is not a failure.
 _BENIGN_LEVELS = ("INFO", "DEBUG", "TRACE", "NOTICE", "VERBOSE")
+
+
+def _handled_exceptions(limit: int = 2000) -> dict:
+    """Exceptions the program RAISED and then silently swallowed.
+
+    These are deliberately NOT failure triggers. A swallowed exception is
+    handled by definition, and a retry loop that catches and retries is healthy;
+    folding these into `_detect_failure_records` would grade such a program
+    unhealthy every run, and asserting "failed" about something the program
+    handled is the same class of false claim this project bans everywhere else.
+
+    But reporting them as NOTHING is worse, and that is what happened. The
+    `swallowed_exceptions` emitter exists precisely because this failure mode is
+    invisible — it records the exception type, the raise site with file:line,
+    the handling function, and an occurrence count, which is the highest-quality
+    evidence AgentVision ever gets. Measured on a program that printed
+    "3 line items, total 34.00 / OK" and exited 0 while silently dropping 2 of
+    5 records: the emitter caught both KeyErrors at worker.py:13, and
+    av_errors_by_fingerprint answered `{"fingerprints": [], "total_failures":
+    0}`. AgentVision re-hid the exact thing it was built to reveal.
+
+    So: a third state, like the OCR tri-state. Not "failed", not "clean" —
+    "handled, and here is where".
+    """
+    recs = _read_action_jsonl(limit=limit)
+    live: list[dict] = []
+    summaries: list[dict] = []
+    for r in recs:
+        src = (r.get("source") or "")
+        if not src.endswith(("bootstrap.swallowed", "bootstrap.swallowed_summary")):
+            continue
+        (summaries if src.endswith("_summary") else live).append(r)
+
+    # The summary is emitted once per run and carries the authoritative totals
+    # (the live records are de-duplicated, so counting them undercounts). Use
+    # the NEWEST summary; older ones belong to earlier runs.
+    sites: list[dict] = []
+    total = 0
+    if summaries:
+        d = summaries[-1].get("data") or {}
+        total = int(d.get("total_occurrences") or 0)
+        sites = list(d.get("sites") or [])
+    else:
+        total = len(live)
+        for r in live:
+            d = r.get("data") or {}
+            sites.append({"type": d.get("type") or d.get("exception_type"),
+                          "raised_at": d.get("raised_at"),
+                          "handled_in": d.get("handled_in"),
+                          "occurrences": d.get("occurrences") or 1})
+    return {
+        "total_occurrences": total,
+        "distinct_sites": len(sites),
+        "sites": sites[:20],
+        "counted_from": "swallowed_summary" if summaries else "live records only",
+        "what_this_is": (
+            "exceptions the program raised and swallowed without logging. NOT "
+            "counted as failures — the program handled them, and catching is "
+            "often deliberate. But nothing else in the program records these, "
+            "so if a run reported success while doing less work than expected, "
+            "this is where to look first."),
+    }
 
 
 def _detect_failure_records(limit: int = 200) -> list[dict]:
@@ -4844,6 +4972,17 @@ def create_or_update_profile():
     if not name:
         return jsonify({"error": "name is required"}), 400
     profiles = load_profiles()
+    # NAME THE PROGRAM AFTER THE PROGRAM. ProgramProfile.display_name defaults
+    # to "Custom Program" — correct for `custom`, the shipped placeholder, and
+    # wrong for everything else. Without this, a profile created as
+    # "orderworker" reported its program as "Custom Program", which breaks the
+    # first instruction av_start_here gives: "check that av_start_here()'s
+    # program is the program you were asked about." An agent that follows it
+    # concludes it is looking at someone else's bridge and creates a duplicate
+    # profile. Measured on a cold run through the MCP client.
+    if not str(data.get("display_name") or "").strip():
+        data = dict(data)
+        data["display_name"] = name
     profiles[name] = ProgramProfile.from_dict(data)
     try:
         save_profiles(profiles)
@@ -6649,6 +6788,54 @@ def diagnose():
         })
         top_signals.insert(
             0, f"{_w.get('count')}x {str(_w.get('message'))[:70]}")
+    # ── Exceptions the program ate ───────────────────────────────────────────
+    # A run that swallows exceptions and still reports success is the single
+    # hardest failure to see from outside, and the `swallowed_exceptions`
+    # emitter exists to make it visible. Producing NO hypothesis from it left
+    # av_diagnose returning hypotheses:[] on a program that had silently dropped
+    # 40% of its input — while its own counts field said 2. Hedged on purpose:
+    # the counts and the site are read straight off the log, but whether the
+    # catch is a BUG is not something AgentVision can know.
+    try:
+        _he = _handled_exceptions()
+        if int(_he.get("total_occurrences") or 0) > 0:
+            _site = (_he.get("sites") or [{}])[0]
+            _where = (f"{_site.get('type') or 'exception'} at "
+                      f"{_site.get('raised_at') or '?'}"
+                      + (f", handled in {_site.get('handled_in')}"
+                         if _site.get("handled_in") else ""))
+            hypotheses.append({
+                "rank": len(hypotheses) + 1,
+                "hypothesis": (
+                    f"{_he['total_occurrences']} exception(s) were raised and "
+                    f"SILENTLY HANDLED across {_he['distinct_sites']} site(s) — "
+                    f"{_where}. Nothing else in the program records these, so a "
+                    f"run can report success having done less work than "
+                    f"expected."),
+                "severity": "medium",
+                # Deliberately not high: the counts and the location are
+                # certain, the FAULT is not. A retry loop that catches and
+                # retries produces this same record and is perfectly healthy.
+                "confidence": 0.6,
+                "confidence_basis": (
+                    "the count and the raise site are read directly off the "
+                    "emitter's own records (near-certain). That the catch is a "
+                    "DEFECT is not established — catching may be deliberate. "
+                    "Check whether the swallowed path silently skips work."),
+                "evidence": {"handled_exceptions": _he},
+                "not_a_failure": (
+                    "these are NOT counted in total_failures or health, because "
+                    "the program handled them"),
+                "next": ["av_errors_by_fingerprint()  (see handled_exceptions)",
+                         f"av_source_file(path={str(_site.get('raised_at') or '').split(':')[0]!r})",
+                         "av_log_raw()"],
+            })
+            top_signals.insert(
+                0, f"{_he['total_occurrences']}x exception silently handled — "
+                   f"{_where}")
+    except Exception as exc:
+        _dbg(f"handled-exception hypothesis failed: {exc}")
+
     # ── Is any of the above even current? ────────────────────────────────────
     # Every hypothesis so far is derived from the log sources. If a source is
     # stale or untimestamped, that has to be said BEFORE the hypotheses, because

@@ -35,7 +35,7 @@ here is:
 
 > **AgentVision may not assert anything it did not verify.**
 
-That rule is not aspirational. It is enforced in code and in 58 test suites, most
+That rule is not aspirational. It is enforced in code and in 59 test suites, most
 of which exist because a specific version of this tool once said "healthy" while
 the program was failing.
 
@@ -94,9 +94,18 @@ fail *silently* if skipped:
 - **Windows** — [`SETUP-Windows.md`](SETUP-Windows.md)
 - **Linux** — [`dist/linux/`](dist/linux) (X11 and Wayland notes, init templates)
 
-Optional: `pip install -e .` gives you the `agentvision` command
-(`agentvision doctor`, `agentvision run -- <cmd>`). Without it, use
-`python3 -m python_backend.cli <subcommand>`.
+Optional but recommended: `pip install -e .` gives you the `agentvision`
+command (`agentvision doctor`, `agentvision run -- <cmd>`), which works from any
+directory. Without it, invoke the CLI **by its script path**:
+
+```bash
+python3 /path/to/AgentVision/python_backend/cli.py doctor
+```
+
+`python3 -m python_backend.cli` also works, but only from the AgentVision folder
+or with `PYTHONPATH` set — and that is the wrong directory for
+`agentvision run`, which has to be run where your program is so it can find the
+project it belongs to. The script-path form has neither constraint.
 
 Ships with **no saved programs** — you add your own.
 
@@ -146,7 +155,7 @@ find out by having something quietly not happen:
 python3 run_all_tests.py
 ```
 
-58 suites. They are worth reading as documentation of real failures: each one
+59 suites. They are worth reading as documentation of real failures: each one
 tends to encode a specific way this tool once misled its caller.
 
 One of them, `bridge_gate`, tests the first-connection contract and so needs a

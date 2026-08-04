@@ -456,12 +456,18 @@ message may also say it for you: `LAST WRITE 108727s AGO — stale?`.
    this pid does not hold it open). Either fix the profile's `log_sources` to the
    real path, or relaunch the program so its output lands where the profile
    expects.
-3. If the plan used `run_wrapper`, relaunch the target through the wrapper. From
-   the AgentVision repo root:
+3. If the plan used `run_wrapper`, relaunch the target through the wrapper.
+   Run this **from your program's own directory** — the wrapper resolves which
+   bridged project it is instrumenting from the command it is given, so
+   launching from elsewhere silently records nothing for your project:
 
 ```
-python -m python_backend.cli run -- ./your-program --your --flags
+python3 /path/to/AgentVision/python_backend/cli.py run -- ./your-program --your --flags
 ```
+
+   (`python -m python_backend.cli` cannot be used here: it only imports from the
+   AgentVision folder, which is not where your program is. `agentvision run --
+   ...` works from anywhere if you ran `pip install -e .`.)
 
 **Confirm.** Call `av_log_raw(peek=True)` again. That source's
 `last_write_age_s` should now be small, `stale` should be `false`, and

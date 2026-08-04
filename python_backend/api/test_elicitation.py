@@ -361,6 +361,25 @@ def main() -> int:
                                          ctx=_Ctx(caps=_Caps(None))))
             check("a plan without user_input asks nothing at all",
                   "input_recording_consent" not in out, str(out))
+
+            # A MALFORMED PLAN MUST REACH THE VALIDATOR AS SENT. `emitters` as
+            # a dict iterates as its keys, so the old gate would fire on
+            # {"user_input": ...} — and the decline path would write
+            # plan["emitters"] back as a LIST, quietly repairing a malformed
+            # plan into one the bridge accepts. The rejection must name the
+            # agent's real mistake, which it cannot do if the gate fixed it.
+            malformed = {"emitters": {"user_input": "keypress handler seen"},
+                         "why": {"user_input": "keypress handler seen"}}
+            posted.clear()
+            out = run(M.av_bridge_commit(
+                plan=dict(malformed),
+                ctx=_Ctx(result=_Result("accept", _Data(record_input=False)))))
+            check("a dict-shaped emitters field never triggers the gate",
+                  "input_recording_consent" not in out, str(out))
+            check("...and the malformed shape reaches the bridge UNREPAIRED",
+                  posted and posted[-1][1]["plan"]["emitters"]
+                  == {"user_input": "keypress handler seen"},
+                  str(posted[-1][1]["plan"] if posted else None))
         finally:
             M._http_post = real_post
 

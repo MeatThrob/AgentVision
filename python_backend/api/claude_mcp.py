@@ -486,7 +486,17 @@ async def _push_loop(bus) -> None:
                 _push_state["last_fingerprint"] = fingerprint
                 continue
             _push_state["last_fingerprint"] = fingerprint
-            uris = ["agentvision://digest"]
+            # Announce the resource that ACTUALLY changed. The `raw` tier means
+            # AgentVision itself had nothing to say — the program printed new
+            # lines and raw output is never withheld. The digest may not have
+            # changed at all in that case (three new INFO lines move no error
+            # counts), and "digest updated" when it did not update is a false
+            # assertion delivered as a push. Signal-driven tiers (notice/alert)
+            # do move the digest, so it stays the pointer for those.
+            if amb.get("tier") == "raw":
+                uris = ["agentvision://log/raw"]
+            else:
+                uris = ["agentvision://digest"]
             if amb.get("incident_ids"):
                 uris.append("agentvision://incidents")
             for uri in uris:
@@ -1059,17 +1069,68 @@ def av_log_push(message: str, category: str = "note",
 
 
 @mcp.tool()
-def av_create_profile(name: str, profile: dict) -> dict:
-    """Create or update a program profile (works for ANY language — the target
-    need not be Python). `profile` keys: display_name, project_root, log_file,
-    action_log_file, capture_app, capture_crop, process_name, capture_user_input,
-    language, and log_sources — a list of {path, adapter, label} for watching
-    MULTIPLE logs at once (adapter='auto' auto-detects the format). The bridge
-    expects these fields flat, so they are merged with `name` here."""
-    body = {"name": name}
+def av_create_profile(name: str, profile: dict | None = None,
+                      project_root: str = "", language: str = "",
+                      display_name: str = "", capture_app: str = "",
+                      capture_crop: str = "", process_name: str = "",
+                      log_file: str = "", action_log_file: str = "",
+                      log_sources: list | None = None,
+                      capture_user_input: bool | None = None) -> dict:
+    """Point AgentVision at a NEW program. Works for ANY language.
+
+    THIS IS WHAT YOU CALL when av_start_here() names a program that is not the
+    one you were asked about. A new program is a new profile, not a replan.
+
+    PASS THE FIELDS FLAT — that is what the rest of this API does, and this tool
+    used to be the one exception:
+
+        av_create_profile(name="orders-api",
+                          project_root="/Users/you/src/orders-api",
+                          language="python")
+
+    `profile={...}` still works and still accepts every field, for anything not
+    named above; where both are given the flat argument wins. (Its old signature
+    REQUIRED the nested dict while the docstring said the bridge wanted them
+    flat, so the natural call failed validation — measured on a cold run, and
+    every later call then silently answered about the previously active
+    program.)
+
+    SET project_root. Without it the code scan in av_bridge_catalog() opens no
+    files, so it reports zero signals — which reads as "this program has no
+    interesting behaviour" when it means "nothing was looked at". This tool now
+    says so in `warning` rather than letting you discover it two calls later.
+
+      project_root        the folder holding the program's source. Set this.
+      language            python/node/ruby/java/csharp/go/rust/… ("" = detect)
+      capture_app         window title or process name to screenshot (GUI only)
+      process_name        used to tell whether the program is running
+      log_file            a text log it already writes
+      action_log_file     a JSONL event log it already writes
+      log_sources         [{path, adapter, label}] to watch SEVERAL logs at once
+                          (adapter="auto" detects the format)
+      capture_user_input  record the human's keys/clicks — SYSTEM-WIDE, off by
+                          default, and it needs their consent, not just yours
+
+    NEXT: av_set_active_profile(name), then av_bridge_status()."""
+    body: dict = {"name": name}
     if isinstance(profile, dict):
         body.update(profile)
-    return _http_post("/profiles", body)
+    flat = {"project_root": project_root, "language": language,
+            "display_name": display_name, "capture_app": capture_app,
+            "capture_crop": capture_crop, "process_name": process_name,
+            "log_file": log_file, "action_log_file": action_log_file}
+    body.update({k: v for k, v in flat.items() if v})
+    if log_sources is not None:
+        body["log_sources"] = log_sources
+    if capture_user_input is not None:
+        body["capture_user_input"] = bool(capture_user_input)
+    out = _http_post("/profiles", body)
+    if isinstance(out, dict) and not str(body.get("project_root") or "").strip():
+        out["warning"] = (
+            "no project_root was set, so av_bridge_catalog() will scan nothing "
+            "and report zero code signals — an absence of INPUT, not an absence "
+            "of signals. Call this again with project_root=... before planning.")
+    return out
 
 
 @mcp.tool()
@@ -2094,7 +2155,13 @@ async def av_bridge_commit(plan: dict, replan: bool = False,
 
     NEXT: av_capture_start()."""
     consent = None
-    emitters = list((plan or {}).get("emitters") or [])
+    # The gate only runs on a well-formed plan. `emitters` as a dict (a shape
+    # agents have sent) would iterate as its KEYS here — and the decline path
+    # would then write plan["emitters"] back as a LIST, quietly repairing a
+    # malformed plan into one the bridge accepts. Malformed input must reach
+    # the validator as sent, so its rejection names the real mistake.
+    _raw_emitters = plan.get("emitters") if isinstance(plan, dict) else None
+    emitters = list(_raw_emitters) if isinstance(_raw_emitters, list) else []
     if "user_input" in emitters and _elicit is not None:
         try:
             # fallback=True: the agent already chose this emitter. In a client

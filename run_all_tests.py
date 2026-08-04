@@ -120,6 +120,12 @@ SUITES = [
     # Counts written in prose rot. Thirteen false statements were found in the
     # published tree by grepping after the fact; this makes the suite find them.
     ("doc_counts",    "python_backend/api/test_doc_counts.py",        False),
+    # THE WORST BUG FOUND SO FAR: av_bridge_commit wires the emitter sinks as
+    # log_sources, and the whole structured-analysis half read action_log_file,
+    # which nothing sets. Eleven MCP tools answered emptily about a log full of
+    # the evidence they exist to surface.
+    ("action_log_wiring",
+     "python_backend/api/test_action_log_wiring.py",                    True),
     # `agentvision run -- <cmd>` is the documented front door; it once
     # instrumented the wrong project silently.
     ("run_front_door", "python_backend/test_run_front_door.py",       False),

@@ -175,6 +175,35 @@ def main() -> int:
               all(p.get("session_id") not in (None, "", "default")
                   for p in forced), str(forced[:2]))
 
+        # THE RAW TIER POINTS AT THE RAW LOG. `raw` means AgentVision had
+        # nothing to say — the program printed new lines. The digest may not
+        # have changed at all (new INFO lines move no error counts), and
+        # "digest updated" when it did not update is a false assertion
+        # delivered as a push. The notification must name the resource that
+        # actually changed.
+        _reset()
+        reply.clear()
+        reply.update({"inject": True, "tier": "raw", "content_fp": "FP-RAW",
+                      "text": "new program output", "other_channel_ms_ago": None})
+        got = asyncio.run(run_for(0.35))
+        check("the raw tier announces the RAW LOG, not the digest",
+              got and str(getattr(got[0], "uri", "")) == "agentvision://log/raw",
+              str([getattr(e, "uri", e) for e in got]))
+        check("...and does not ALSO claim the digest changed",
+              all(str(getattr(e, "uri", "")) != "agentvision://digest"
+                  for e in got), str([getattr(e, "uri", e) for e in got]))
+
+        # An incident rides along regardless of tier — frozen failure windows
+        # are always worth a pointer.
+        _reset()
+        reply.update({"content_fp": "FP-RAW-INC", "incident_ids": ["inc-1"]})
+        got = asyncio.run(run_for(0.35))
+        check("an incident is announced alongside the raw log",
+              {str(getattr(e, "uri", "")) for e in got}
+              == {"agentvision://log/raw", "agentvision://incidents"},
+              str([getattr(e, "uri", e) for e in got]))
+        reply.pop("incident_ids", None)
+
         # 6. Silence and heartbeats must not wake anyone.
         for tier, inject in (("silent", False), ("heartbeat", True)):
             _reset()
