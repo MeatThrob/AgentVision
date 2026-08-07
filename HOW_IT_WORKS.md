@@ -208,9 +208,15 @@ stream line up exactly even when the box isn't on UTC.
 
 ---
 
-## 5. The MCP tool surface — 90 tools in 19 groups
+## 5. The MCP tool surface — 94 tools in 20 groups
 
-A selection below; `docs/MCP_TOOLS_REFERENCE.md` is generated from the code and lists all 90.
+A selection below; `docs/MCP_TOOLS_REFERENCE.md` is generated from the code and lists all 94.
+
+**Machine hardware black box** (full-PC crashes — thermal / PSU / CPU; see `docs/HARDWARE_BLACKBOX.md`)
+`av_hw_status`, `av_hw_metrics(window)`, `av_hw_crashes(id)`, `av_hw_monitor(action)` —
+machine-wide temps/fans/voltage-rails/watts sampled to an fsync'd store that
+survives a hard power cut; on the next start the crash is auto-diagnosed into a
+capsule with ranked verdicts, evidence, and next steps.
 
 **Observe the live program**
 `av_status`, `av_overview`, `av_program_status`, `av_capture_status`,

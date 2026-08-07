@@ -2,8 +2,10 @@
 
 **A debug flight recorder for AI coding agents.** It watches one program you are
 debugging — screenshots its window on a timer, parses its logs with 658 format
-adapters, and time-aligns the two — then exposes the result to an AI agent as 90
-MCP tools.
+adapters, and time-aligns the two — then exposes the result to an AI agent as
+94 MCP tools. A second, machine-wide flight recorder catches what no
+per-program tool survives: full-PC crashes (thermal, PSU, CPU — see
+[the hardware black box](docs/HARDWARE_BLACKBOX.md)).
 
 Everything runs locally on your own CPU. Capturing, hashing, diffing and parsing
 are free; the only expensive resource is the agent's context, so AgentVision
@@ -11,8 +13,9 @@ spends its own compute to keep that small.
 
 ```
 your program ──┬── window screenshots ──┐
-               │                        ├── one time-aligned timeline ── 90 av_* MCP tools ── your AI agent
+               │                        ├── one time-aligned timeline ── 94 av_* MCP tools ── your AI agent
                └── logs (658 adapters) ─┘
+the machine ───── temps/fans/rails/watts, fsync'd ── crash capsule + verdict ──┘
 ```
 
 ---
@@ -35,7 +38,7 @@ here is:
 
 > **AgentVision may not assert anything it did not verify.**
 
-That rule is not aspirational. It is enforced in code and in 59 test suites, most
+That rule is not aspirational. It is enforced in code and in 60 test suites, most
 of which exist because a specific version of this tool once said "healthy" while
 the program was failing.
 
@@ -118,7 +121,7 @@ built, and your exact next call. Then read
 contract is written for you, including what to do when the active profile is not
 the program you were asked about.
 
-Alongside the 90 tools there are 12 `agentvision://` resource URIs, so heavy
+Alongside the 94 tools there are 12 `agentvision://` resource URIs, so heavy
 artifacts — the ~200 KB catalog, a single frame, one frozen incident — can be
 addressed rather than pasted into your context.
 
@@ -144,7 +147,8 @@ find out by having something quietly not happen:
 | [Bridge protocol](docs/BRIDGE_PROTOCOL.md) | the first-connection contract |
 | [Logs & emitters](docs/LOGS_AND_EMITTERS.md) | what to build into a program, and why |
 | [Adapters guide](docs/ADAPTERS_GUIDE.md) | the 658 log formats, and adding your own |
-| [MCP tools reference](docs/MCP_TOOLS_REFERENCE.md) | all 90 tools (generated from code) |
+| [MCP tools reference](docs/MCP_TOOLS_REFERENCE.md) | all 94 tools (generated from code) |
+| [Hardware black box](docs/HARDWARE_BLACKBOX.md) | diagnosing full-machine crashes (thermal / PSU / CPU) |
 | [Push mode](docs/PUSH_MODE.md) | how state reaches an agent without being asked |
 | [Token efficiency research](docs/RESEARCH_TOKEN_EFFICIENCY.md) | the measurements behind the design |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | when it is not working |
@@ -155,7 +159,7 @@ find out by having something quietly not happen:
 python3 run_all_tests.py
 ```
 
-59 suites. They are worth reading as documentation of real failures: each one
+60 suites. They are worth reading as documentation of real failures: each one
 tends to encode a specific way this tool once misled its caller.
 
 One of them, `bridge_gate`, tests the first-connection contract and so needs a

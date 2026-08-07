@@ -54,9 +54,9 @@ So Claude sees a visual glitch in a frame, then pulls the exact log lines from t
 
 **AI-facing JSON depth (v2 / `schema_version` 2.0.0):** every frame carries an AI triage layer — `summary`, `recommended_next`, `tags`, `confidence` — plus a STRUCTURED `error` (multi-language exception parse → `exception_type`, `frames[{file,line,func}]`, `probable_cause`, `fingerprint`, `occurrence_count`, `first/last_seen`), a `state_delta` (key-level change vs the previous frame), `correlation` (trace/run ids), and a richer `anomaly` (`confidence`, `evidence`). `av_digest` is the compact, ranked triage entry point. All fields are documented in `docs/SCHEMA.md`; the intelligence lives in `python_backend/modules/diagnostics.py`. The bridge returns uniform JSON on every error (no HTML pages). Test suites: `run_all_tests.py` (schema, diagnostics, log adapters, langdetect, bridge routes).
 
-## The MCP tool surface — 90 tools in 19 groups
+## The MCP tool surface — 94 tools in 20 groups
 
-The 44 below are the ones reached for most often. `docs/MCP_TOOLS_REFERENCE.md` is generated from the code and lists all 90.
+The 48 below are the ones reached for most often. `docs/MCP_TOOLS_REFERENCE.md` is generated from the code and lists all 94.
 
 **Observe the live program**
 - `av_status`, `av_overview`, `av_program_status`, `av_capture_status`, `av_daemon_status`
@@ -84,6 +84,9 @@ The 44 below are the ones reached for most often. `docs/MCP_TOOLS_REFERENCE.md` 
 
 **Profiles** (which program is being watched)
 - `av_list_profiles`, `av_active_profile`, `av_set_active_profile(name)`, `av_create_profile(name)`, `av_delete_profile(name)`, `av_install_project(project_root)`, `av_install_verify(project_root)`
+
+**Machine hardware black box** (full-PC crashes — thermal/PSU/CPU — that no per-program tool survives; `docs/HARDWARE_BLACKBOX.md`)
+- `av_hw_status`, `av_hw_metrics(window)`, `av_hw_crashes(id)`, `av_hw_monitor(action)` — fsync'd machine telemetry (`modules/hw_blackbox.py` + `utils/hw_sensors.py`), crash capsules with ranked verdicts frozen at startup after an unclean session
 
 ## How Claude connects (the exact wiring)
 

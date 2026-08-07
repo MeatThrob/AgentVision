@@ -1506,6 +1506,69 @@ def av_metrics(window: int = 50) -> dict:
 
 
 @mcp.tool()
+def av_hw_status() -> dict:
+    """THE MACHINE'S black box, not the program's: hardware-recorder state, the
+    latest machine-wide telemetry sample (temps, fans, voltage rails, power
+    draw, CPU load, throttle flags), which sensor sources this machine can and
+    cannot provide (with the fix for each gap), live alerts (overheating,
+    throttling, rail sag), and recent crash capsules.
+
+    READ `boot_capsule` FIRST if present — it means the previous session ended
+    in a FULL-MACHINE crash and the diagnosis was already frozen at startup:
+    follow up with av_hw_crashes(id=...) for the ranked verdict. Use this tool
+    when the user reports the whole PC crashing/rebooting/freezing — a
+    per-program tool cannot see those. Small JSON."""
+    return _http_get("/hw/status")
+
+
+@mcp.tool()
+def av_hw_metrics(window: int = 600) -> dict:
+    """Machine-hardware trends over the last `window` SECONDS (default 600,
+    cap 86400): hottest temperature, CPU load, total measured watts, and
+    per-voltage-rail min/latest — the same series the crash verdict engine
+    reads, live. Use it to watch a machine under load: temps ramping toward
+    ~95°C means thermal trouble; a 12V rail dipping under 11.4V means PSU
+    trouble — BEFORE the next crash. Small JSON."""
+    return _http_get("/hw/metrics", {"window": int(window)})
+
+
+@mcp.tool()
+def av_hw_crashes(id: str = "", limit: int = 10) -> dict:
+    """Full-machine crash capsules the hardware black box froze. Without `id`:
+    the newest `limit` as {id, summary, top_cause, machine_rebooted}. With
+    `id`: that capsule's complete evidence — ranked verdicts (THERMAL /
+    PSU-POWER / CPU-HARDWARE / DRIVER / RAM / FAN) each with score,
+    confidence, human-readable evidence lines and concrete next steps, the OS
+    post-mortem (Windows Kernel-Power 41 + WHEA / Linux previous-boot journal
+    + pstore / macOS shutdown-cause codes), what data was MISSING, and a
+    ready-to-show markdown report. This is the answer to 'why did the PC turn
+    itself off' — built from the fsync'd telemetry tail that survived the
+    crash."""
+    params: dict = {"limit": int(limit)}
+    if id:
+        params = {"id": id}
+    return _http_get("/hw/crashes", params)
+
+
+@mcp.tool()
+def av_hw_monitor(action: str = "status", interval: float = 2.0) -> dict:
+    """Control the machine-wide hardware recorder. action='start' begins
+    fsync'd telemetry sampling every `interval` seconds (floor 0.5; the fsync
+    per sample is what lets the record survive a hard power cut); 'stop' ends
+    it and marks the session cleanly shut down; 'status' is a cheap
+    running/not-running check (av_hw_status is the rich version). The bridge
+    normally starts the recorder itself at startup (AGENTVISION_HW_BLACKBOX=0
+    disables) — reach for this when it was disabled, or to change the
+    interval before reproducing a crash under load."""
+    action = (action or "status").strip().lower()
+    if action == "start":
+        return _http_post(f"/hw/start?interval={float(interval)}")
+    if action == "stop":
+        return _http_post("/hw/stop")
+    return _http_get("/hw/status")
+
+
+@mcp.tool()
 async def av_capabilities(ctx: Context = None) -> dict:
     """The AI's 'what can I do here'. What AgentVision can do RIGHT NOW: platform,
     capture backend, log-adapter + source-reader counts, active profile + language,
@@ -2022,8 +2085,9 @@ def av_bridge_status() -> dict:
     A program AgentVision has never seen starts PROVISIONAL: capture and emitter
     installation are REFUSED until you review the catalog and commit a plan.
 
-    This is deliberate. AgentVision owns 658 log adapters, 9 binary readers, 90
-    tools and a per-language emitter library — but it cannot know which of those a
+    This is deliberate. AgentVision owns 658 log adapters, 9 binary readers,
+    94 tools and a per-language emitter library — but it cannot know which of
+    those a
     program needs, because that depends on what the code IS and DOES. Left to
     itself it scaffolds the same fixed set for a web server and a GPU emulator and
     reports success either way, so a wrong bridge is indistinguishable from a
@@ -2045,7 +2109,7 @@ async def av_bridge_catalog(ctx: Context = None) -> dict:
       adapters             658 parsers grouped by family (drill in with
                            av_list_adapters) — these READ logs that already exist
       source_readers       binary formats (utmp, pcap, netflow, …)
-      mcp_tool_groups      all 90 tools in 19 groups, each entry carrying what
+      mcp_tool_groups      all 94 tools in 20 groups, each entry carrying what
                            the tool returns, what it NEEDS, its token cost and
                            a relevance verdict for THIS program
       capture_settings     frame rate — ASK THE USER, do not assume (or call

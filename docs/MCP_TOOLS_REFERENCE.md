@@ -1,7 +1,7 @@
 # AgentVision MCP tool reference
 
 **Generated from `python_backend/api/tool_meta.json`. Do not edit by hand —
-run `scripts/gen_tools_ref.py`.** 90 tools in 19 groups.
+run `scripts/gen_tools_ref.py`.** 94 tools in 20 groups.
 
 Every description here was derived by reading the tool's implementation and
 its HTTP handler, not its docstring. Where the two disagreed, the handler won
@@ -1614,6 +1614,86 @@ program kinds: gui, headless, cli, service, game
 **Not for:** Not a diagnosis tool (use av_diagnose) and not a way to review a whole capture run (use av_visual_changes) — it is a one-glance 'anything urgent?' check. Silent-by-default plus per-session suppression means calling it twice in a row for the same session usually returns inject=false even while a real problem persists; use force=True to re-see it (byte caps still apply, and force never commits the raw-log read offset, so a forced preview cannot blind the next real injection).
 
 > ⚠ **Caveat (from the code):** The MCP tool signature (claude_mcp.py:1836) only exposes session_id/event/force; it does NOT expose the route's stop_check/stop_hook_active parameters, so the Stop-hook backstop logic in ambient.py (stop_backstop(), STOP_BLOCK_ENABLED, MAX_STOP_BLOCKS) is unreachable through this MCP tool and only usable via a direct HTTP call to /ambient. Also, the assignment's extra backend ranges (/capabilities, /digest, /incidents, /latest, /start_here, /token_report, /visual_changes) are NOT called over HTTP by /ambient — the range for /digest and /incidents was worth reading because /ambient literally shares their in-process functions/globals (_health_block, _incidents), but /capabilities, /latest, /start_here, /token_report and /visual_changes turned out to be unrelated to av_ambient's actual code path (no call, no shared helper) and appear to be a mechanical/keyword false-positive in this assignment.
+
+## `machine_blackbox` — 4 tool(s)
+
+*The MACHINE's flight recorder — full-PC crashes (thermal/PSU/CPU), which no per-program tool survives.*
+
+### `av_hw_status`
+
+**Returns:** Machine hardware black-box status: recorder state, live telemetry sample, sensor inventory with gaps, alerts, and recent full-machine crash capsules.
+
+**Use when:** The user says the whole PC crashes/reboots/freezes/turns off, or you want to confirm the hardware recorder is armed (and what it can see) before a crash-reproduction run.
+
+Reads the in-process BlackboxRecorder state (running flag, sample count, store bytes, last sample, throttled live alerts), calls hw_sensors.sensor_inventory() for a live capability probe with remediation hints, lists the 5 newest crash capsules from the black-box folder, and attaches the startup-time capsule summary when the previous session ended in a full-machine crash.
+
+**Why not do it by hand:** Gives the agent the machine-level picture no per-program tool can see: whether the hardware recorder is running, the freshest temps/fans/rails/power/load sample, live alerts (overheating, throttling, rail sag), the sensor gaps on THIS machine with the concrete fix for each, and -- when the previous session died with the machine -- the crash capsule that was already frozen at startup.
+
+needs: `none`  
+cost: `low`  
+languages: `any`  
+program kinds: gui, headless, cli, service, game
+
+**Not for:** Not for program-level perf (av_metrics) or program crashes that leave the OS running (av_diagnose / av_incidents). Sensor depth is machine-dependent: a Windows box without LibreHardwareMonitor's web server reports load/clocks only, and macOS temps need a helper binary -- the inventory block says exactly which of these apply.
+
+> ⚠ **Caveat (from the code):** The `inventory` block is built by taking a LIVE sensor sample on every call (subprocess probes included), so the route costs tens of milliseconds, not microseconds -- it is a status tool, not a hot-loop polling target. `boot_capsule` is only set when THIS bridge process's startup check fired; a crash discovered by a later standalone run appears under `capsules` instead.
+
+### `av_hw_metrics`
+
+**Returns:** Machine telemetry trends over the last N seconds: hottest temp, CPU load, total watts, per-rail voltage min/latest.
+
+**Use when:** Watching a machine under load for the crash signature building up -- before/during a reproduction run, after av_hw_status showed the recorder armed, or when deciding thermal-vs-PSU from live behaviour.
+
+Loads the last `window` seconds (default 600, cap 86400) of samples from the black-box JSONL store, then aggregates: max temperature across every sensor per sample, cpu.load_pct, summed measured watts (package power + GPU), and min/max/latest per voltage rail (capped at 24 rails), plus the recorder's live alert list.
+
+**Why not do it by hand:** One small JSON of the machine's thermal/power/electrical trend instead of paging raw samples: hottest sensor, CPU load, total measured watts, and per-rail voltage min/latest over the window -- the exact series the crash verdict engine scores, so an agent can watch a crash build up live (temps ramping to limits, a 12V rail sagging) and warn BEFORE the machine dies.
+
+needs: `none`  
+cost: `low`  
+languages: `any`  
+program kinds: gui, headless, cli, service, game
+
+**Not for:** Not per-program CPU/RSS (av_metrics). Not a transient catcher: sampling is interval-based (default 2 s), so a microsecond rail dip or an instantaneous VRM trip will not appear in any series -- absence of an anomaly here does not clear the PSU. Rails/temps only appear if this machine's sensor sources provide them (see av_hw_status inventory).
+
+> ⚠ **Caveat (from the code):** Series are read from the fsync'd on-disk day files, not from memory, so they survive bridge restarts and include samples written by a standalone recorder run -- but it also means an empty result usually just means the recorder never ran (check recorder_running). `window` is SECONDS here, while av_metrics' window is FRAMES; the two tools deliberately mirror each other's naming.
+
+### `av_hw_crashes`
+
+**Returns:** Full-machine crash capsules: ranked hardware-cause verdicts (thermal/PSU/CPU/driver/RAM/fan) with evidence, OS post-mortem, and next steps.
+
+**Use when:** After any unexpected machine reboot/power-off -- av_hw_status's boot_capsule points here -- or when the user asks what past crashes were diagnosed as.
+
+Without `id`: lists the newest `limit` (1-40, default 10) capsule folders as {id, summary, top_cause, machine_rebooted}. With `id`: loads that capsule's report.json (ranked verdicts with score/confidence/evidence/next_steps, missing_data, boot-vs-last-sample timing), postmortem.json (raw OS log extracts), and report.md (ready-to-show markdown).
+
+**Why not do it by hand:** Answers 'why did the PC turn itself off' from evidence that survived the crash: the fsync'd telemetry tail plus the OS's own post-mortem (Kernel-Power 41/WHEA on Windows, previous-boot journal + pstore on Linux, shutdown-cause codes on macOS), scored into ranked causes with confidence, the evidence lines behind each score, what data was MISSING, and concrete next steps -- instead of the classic 'check Event Viewer' hand-wave.
+
+needs: `none`  
+cost: `low`  
+languages: `any`  
+program kinds: gui, headless, cli, service, game
+
+**Not for:** Not for program crashes that leave the OS running -- those are av_diagnose / av_incidents territory. The verdict is ranked-most-consistent, not proof: software polling cannot see sub-interval electrical transients, and every report carries that caveat in missing_data.
+
+> ⚠ **Caveat (from the code):** Capsules are frozen by the STARTUP check of whichever recorder ran next after the crash (bridge or standalone CLI) -- this tool only reads them. A crash on a machine where no recorder was running beforehand yields a capsule whose verdict rests on OS logs alone, with missing_data saying so. Recorder-died-but-machine-stayed-up events deliberately mint NO capsule (anti cry-wolf), so an empty list plus an unclean kill is normal.
+
+### `av_hw_monitor`
+
+**Returns:** Start/stop/status of the machine hardware recorder (fsync'd telemetry sampling).
+
+**Use when:** Before reproducing a full-machine crash under load (tighter interval), or when the bridge was started with the black box disabled and you need it armed now.
+
+action='start' POSTs /hw/start with `interval` seconds (floor 0.5) and returns recorder status; action='stop' POSTs /hw/stop (marks the session cleanly shut down); anything else GETs /hw/status.
+
+**Why not do it by hand:** Arms or disarms the machine-wide flight recorder without touching the bridge process: start fsync'd sampling before a crash-reproduction run (or at a tighter interval), stop it to mark a clean shutdown, or cheaply confirm it is running.
+
+needs: `none`  
+cost: `low`  
+languages: `any`  
+program kinds: gui, headless, cli, service, game
+
+**Not for:** Not the reading surface (av_hw_status / av_hw_metrics / av_hw_crashes). Cannot record through the machine being OFF or the bridge process being dead -- for a box that crashes at random times, run the standalone recorder from OS startup (docs/HARDWARE_BLACKBOX.md) instead of relying on a manually started bridge.
+
+> ⚠ **Caveat (from the code):** start is idempotent (a running recorder just keeps running) and re-applies `interval` to the live loop. stop marks session.json clean -- calling it and then having the machine crash later loses the unclean-session signal, so leave the recorder running on a box being diagnosed. The bridge auto-starts the recorder unless AGENTVISION_HW_BLACKBOX=0.
 
 ## `profiles` — 5 tool(s)
 

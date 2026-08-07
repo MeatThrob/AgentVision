@@ -37,7 +37,7 @@ This is backwards from every other tool you have used. Most tools inspect a
 project, guess, and install something. AgentVision refuses to guess.
 
 Why it refuses: AgentVision owns 658 log-format adapters, 9 binary log readers,
-90 MCP tools, and a per-language library of "emitters" (small hooks that make a
+94 MCP tools, and a per-language library of "emitters" (small hooks that make a
 silent program start talking). Which of those a program needs depends on what
 the code **is** and what it **does** — and nothing in a directory listing tells
 you that. The old behaviour sniffed the language and scaffolded a fixed set, so
@@ -127,7 +127,7 @@ biggest response you will read in this flow. Read these fields:
 | `emitters_available` | Every emitter you may pick, each with `captures`, `misses`, `cost`, `good_for`, `languages`, `builds_as`. Read `misses` — it tells you what a choice will be blind to. |
 | `code_evidence.primary_language` | The language actually detected by scanning files. |
 | `code_evidence.signals` | The load-bearing part. Per signal: `count`, `files`, `means`, `argues_for`. Each selection you make must answer to one of these. |
-| `mcp_tool_groups` | The 90 tools in 19 groups. Each tool carries `summary`, `needs`, `cost`, `verdict` (`core` / `useful` / `n/a`), `verdict_reason`, and sometimes `caveat` (a known defect — trust it over the tool's docstring). |
+| `mcp_tool_groups` | The 94 tools in 20 groups. Each tool carries `summary`, `needs`, `cost`, `verdict` (`core` / `useful` / `n/a`), `verdict_reason`, and sometimes `caveat` (a known defect — trust it over the tool's docstring). |
 | `adapters` | 658 log **parsers**, grouped by family, with counts. Drill in with `av_list_adapters(family=..., q=...)`. |
 | `existing_logs_found` | Every log this program has. `declared: true` = already read. `declared: false` = **sitting in the project and not read yet**, with `covered` / `detected_adapter` grading whether any parser understands its format, and a copy-paste adapter recipe when none does. An undeclared log is only read once you pin its label in `plan.adapters` — that is the whole answer to "this program already logs, use that instead of installing an emitter". |
 | `capture_settings` | Frame-rate envelope, 0.1–10 seconds per shot. **Ask the user**; do not assume. |
@@ -573,7 +573,7 @@ whole mechanism prevents: capture with no plan and no chosen logging.
 
 | File | Contents |
 |---|---|
-| `docs/MCP_TOOLS_REFERENCE.md` | All 90 tools in 19 groups, each with `needs`, `cost`, caveats. **Generated** from `python_backend/api/tool_meta.json` by `scripts/gen_tools_ref.py` — never hand-edit it. |
+| `docs/MCP_TOOLS_REFERENCE.md` | All 94 tools in 20 groups, each with `needs`, `cost`, caveats. **Generated** from `python_backend/api/tool_meta.json` by `scripts/gen_tools_ref.py` — never hand-edit it. |
 | `docs/MCP_TOOL_AUDIT.md` | 77 recorded tool defects and caveats, 12 of them Class A (the tool actively misleads its caller). Read before trusting a surprising result. |
 | `docs/WHAT_IS_AGENTVISION.md` | The full system description: architecture, emitters, capture, alignment. |
 | `docs/AGENT_INSTRUCTIONS.md` | A paste-ready block for a project's `CLAUDE.md`, plus the MCP prompts and resources the server exposes. |

@@ -76,7 +76,7 @@ Only two operations are gated. Everything else works in both states.
 | `av_install_project(...)` | **REFUSED** | allowed |
 | `av_bridge_status`, `av_bridge_catalog` | allowed | allowed |
 | `av_bridge_commit` | performs the build | no-op unless `replan=True` |
-| every other one of the 90 MCP tools | allowed | allowed |
+| every other one of the 94 MCP tools | allowed | allowed |
 
 Source of truth: `bridge_server.py` line 3261 (`/capture/start`) and line 3534
 (`/install`) are the only two places that call `bridge_plan.is_sealed()` as a
@@ -348,7 +348,7 @@ an id that was not offered records a decision the installer will not honour.
 
 ### 4.4 `mcp_tool_groups` — and the verdict you should obey
 
-19 groups, 90 tools, every tool in exactly one group. Each group has this shape
+20 groups, 94 tools, every tool in exactly one group. Each group has this shape
 (this is a shape sketch, not something you send):
 
 ```text
@@ -370,7 +370,7 @@ The 19 group names: `start`, `cheap_visual_path`, `flight_recorder`, `ui_tree`,
 | `cost` | token cost band |
 | `verdict` | `core` = usable now; `useful` = usable once a precondition is met; `n/a` = cannot work on this program |
 | `verdict_reason` | present only when `verdict != "core"`. **Copy this into `not_relevant` as the reason.** |
-| `caveat` | a recorded defect in that tool. 78 of 90 tools carry one. |
+| `caveat` | a recorded defect in that tool. 78 of 94 tools carry one. |
 
 **Rule: never put a `verdict: "n/a"` tool in `plan.tools.primary`.** Put it in
 `not_relevant` and reuse its `verdict_reason`.
@@ -382,7 +382,7 @@ Measured, so you know what to expect:
   capture tools. 63 are `core`.
 - A **C GUI** program: exactly **1** tool comes back `n/a` — `av_run_tests`,
   because it hardcodes `python -m pytest`.
-- 89 of the 90 tools are language-agnostic. `av_run_tests` is the only one
+- 93 of the 94 tools are language-agnostic. `av_run_tests` is the only one
   restricted by language (to `python`).
 
 So the real discriminator is GUI vs headless, not language.
@@ -1001,7 +1001,7 @@ the raw HTTP route accepts one.
 It is produced from `python_backend/api/tool_meta.json` by
 `scripts/gen_tools_ref.py`. Never hand-edit it. Edit the JSON and regenerate.
 
-### 11.4 78 of 90 tools have a recorded defect
+### 11.4 78 of 94 tools have a recorded defect
 
 `docs/MCP_TOOL_AUDIT.md` lists them, 12 of which are Class A — the tool actively
 misleads its caller. The catalog surfaces the same text per tool as `caveat`.

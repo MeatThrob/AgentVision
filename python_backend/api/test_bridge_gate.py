@@ -174,7 +174,7 @@ check("a plan with no per-emitter reasons is rejected",
       post("/bridge/commit", {"plan": nowhy}).get("sealed") is not True)
 
 # The tool half of the review. A plan that decided about emitters but never
-# looked at the 90 tools is exactly the half-done review this gate exists for.
+# looked at the 94 tools is exactly the half-done review this gate exists for.
 _base = {"catalog_token": cat["catalog_token"], "emitters": ["lifecycle"],
          "why": {"lifecycle": "no existing_logging signal anywhere in this project"},
          "rationale": "a headless python service with no logging at all"}

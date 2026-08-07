@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentvision"
-version = "5.0.0"
+version = "5.1.0"
 description = "A local debug flight recorder for AI agents: time-aligned screenshots and parsed logs for one target program, exposed as MCP tools."
 readme = "docs/README.md"
 requires-python = ">=3.11"

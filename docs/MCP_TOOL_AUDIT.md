@@ -1,4 +1,4 @@
-# MCP tool audit — 90 tools read against their own implementations
+# MCP tool audit — 94 tools read against their own implementations
 
 Produced by 45 parallel agents, each reading a tool body, its Flask route and
 one level of helpers. Descriptions were derived from the HANDLER, not the

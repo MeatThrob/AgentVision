@@ -224,6 +224,21 @@ _pinned_seqs: set[int] = set()       # frames an incident owns — never pruned
 _recorder_stats: dict = {"frames_pruned": 0, "bytes_pruned": 0,
                          "incidents_frozen": 0, "prunes_run": 0}
 
+# ── HARDWARE BLACK BOX ────────────────────────────────────────────────────────
+# The visual flight recorder above watches the PROGRAM; this one watches the
+# MACHINE. It samples machine-wide hardware telemetry (temps/fans/voltage
+# rails/power/load) into an fsync'd JSONL store that survives a hard power
+# cut, and on every bridge start it checks whether the previous session ended
+# in a full-machine crash — freezing a diagnosis capsule (telemetry tail + OS
+# post-mortem logs + ranked verdict) when it did. See modules/hw_blackbox.py.
+from modules import hw_blackbox as _hwbb
+
+HW_BLACKBOX_ENABLED = os.environ.get("AGENTVISION_HW_BLACKBOX", "1") != "0"
+_hw_recorder = _hwbb.BlackboxRecorder()
+#: The capsule frozen at THIS startup, if the previous session died with the
+#: machine — surfaced by /hw/status so an agent sees it without digging.
+_hw_boot_capsule: dict | None = None
+
 #: Escape hatch for the old behaviour. OFF by default: a frame must contain ONLY
 #: the bridged program, so when a capture_app is named but has no window we skip
 #: the frame rather than storing a screenshot of the whole desktop. Profiles with
@@ -7580,6 +7595,110 @@ def metrics():
     }), 200
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  Hardware black box — machine-wide crash telemetry (modules/hw_blackbox.py)
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.route("/hw/status", methods=["GET"])
+def hw_status():
+    """Recorder state + the latest telemetry sample + what this machine's
+    sensors can/cannot report + recent crash capsules. If THIS startup froze a
+    capsule (the previous session died with the machine), it is right here in
+    `boot_capsule` — an agent should read that before anything else."""
+    from utils import hw_sensors
+    st = _hw_recorder.status()
+    st["enabled"] = HW_BLACKBOX_ENABLED
+    st["inventory"] = hw_sensors.sensor_inventory()
+    st["capsules"] = _hwbb.list_capsules(_hw_recorder.root, limit=5)
+    if _hw_boot_capsule:
+        st["boot_capsule"] = {"id": _hw_boot_capsule["id"],
+                              "summary": _hw_boot_capsule["report"]["summary"]}
+    return jsonify(st), 200
+
+
+@app.route("/hw/start", methods=["POST"])
+def hw_start():
+    """Start (or re-start) the hardware recorder. Body/query `interval` in
+    seconds (default 2.0, floor 0.5). Idempotent."""
+    try:
+        interval = float(request.values.get("interval",
+                                            _hw_recorder.interval))
+    except (TypeError, ValueError):
+        abort(400, "interval must be a number of seconds")
+    _hw_recorder.interval = max(0.5, interval)
+    _hw_recorder.start()
+    return jsonify({"started": True, **_hw_recorder.status()}), 200
+
+
+@app.route("/hw/stop", methods=["POST"])
+def hw_stop():
+    """Stop the recorder and mark the session as a CLEAN shutdown (so the next
+    start will not read it as a crash)."""
+    _hw_recorder.stop()
+    return jsonify({"stopped": True, **_hw_recorder.status()}), 200
+
+
+@app.route("/hw/metrics", methods=["GET"])
+def hw_metrics():
+    """Machine-telemetry trends over the last `window` seconds (default 600,
+    cap 86400): hottest temp, CPU load, total measured watts, and per-rail
+    voltage min/latest — the live view of the same series the crash verdict
+    reads. Small JSON."""
+    window = max(10.0, min(86400.0, float(_int_arg("window", 600))))
+    samples = _hwbb.read_recent_samples(_hw_recorder.root, window,
+                                        now=time.time())
+
+    def _series(vals: list[float]) -> dict:
+        vals = [v for v in vals if isinstance(v, (int, float))]
+        if not vals:
+            return {"latest": None, "min": None, "max": None, "n": 0}
+        return {"latest": round(vals[-1], 2), "min": round(min(vals), 2),
+                "max": round(max(vals), 2), "n": len(vals)}
+
+    hottest, cpu_load, watts = [], [], []
+    rails: dict[str, list[float]] = {}
+    for s in samples:
+        t, _label = _hwbb._max_temp(s)
+        if t is not None:
+            hottest.append(t)
+        lp = (s.get("cpu") or {}).get("load_pct")
+        if isinstance(lp, (int, float)):
+            cpu_load.append(float(lp))
+        p = _hwbb._total_power(s)
+        if p is not None:
+            watts.append(p)
+        for label, v in (s.get("volts") or {}).items():
+            if isinstance(v, (int, float)):
+                rails.setdefault(label, []).append(float(v))
+    return jsonify({
+        "window_s": window, "samples": len(samples),
+        "recorder_running": _hw_recorder.status()["running"],
+        "max_temp_c": _series(hottest),
+        "cpu_load_pct": _series(cpu_load),
+        "total_power_w": _series(watts),
+        "rails_v": {label: _series(vals) for label, vals in
+                    sorted(rails.items())[:24]},
+        "alerts": _hw_recorder.status()["alerts"],
+    }), 200
+
+
+@app.route("/hw/crashes", methods=["GET"])
+def hw_crashes():
+    """Crash capsules the black box has frozen. Without `id`: the newest
+    `limit` (default 10) as {id, summary, top_cause, machine_rebooted}. With
+    `id`: that capsule's full report + post-mortem + markdown."""
+    cid = (request.args.get("id") or "").strip()
+    if cid:
+        cap = _hwbb.load_capsule(cid, _hw_recorder.root)
+        if cap is None:
+            abort(404, f"no crash capsule '{cid}'")
+        return jsonify(cap), 200
+    limit = max(1, min(40, _int_arg("limit", 10)))
+    return jsonify({"capsules": _hwbb.list_capsules(_hw_recorder.root,
+                                                    limit=limit),
+                    "root": str(_hw_recorder.root)}), 200
+
+
 def _tool_catalog_groups() -> dict:
     """The MCP tools, grouped by what they are FOR.
 
@@ -7632,6 +7751,8 @@ def _tool_catalog_groups() -> dict:
         "health": ["av_selftest", "av_daemon_status", "av_program_status",
                    "av_run_tests"],
         "program": ["av_program_stats", "av_program_crop", "av_ambient"],
+        "machine_blackbox": ["av_hw_status", "av_hw_metrics",
+                             "av_hw_crashes", "av_hw_monitor"],
         "bookmarks": ["av_list_bookmarks", "av_get_bookmark",
                       "av_frame_annotations"],
         "wrap_up": ["av_session_report"],
@@ -11587,6 +11708,57 @@ if __name__ == "__main__":
     # the bridged program's own log.
     import threading as _t
     _t.Thread(target=_stuck_watchdog, daemon=True, name="av-watchdog").start()
+
+    # Hardware black box: FIRST check whether the previous session ended in a
+    # full-machine crash (this must run before a new session marker overwrites
+    # the old one), then start recording. AGENTVISION_HW_BLACKBOX=0 disables.
+    #
+    # The whole sequence runs in a background thread: the post-mortem
+    # collection shells out to the OS (`pmset -g log` alone measured ~17 s on
+    # a mac with a long power log), and blocking the HTTP server on that
+    # would make every bridge restart look hung. The ORDER inside the thread
+    # is what matters — check first, then start, so the new session marker
+    # cannot overwrite the unclean one before it is read.
+    if HW_BLACKBOX_ENABLED:
+        def _hw_boot_sequence():
+            global _hw_boot_capsule
+            try:
+                cap = _hwbb.check_previous_session(_hw_recorder.root)
+                if cap and cap.get("id"):
+                    _info(f"HW BLACKBOX: the previous session ended in a "
+                          f"FULL-MACHINE crash — capsule {cap['id']} frozen: "
+                          f"{cap['report']['summary']}")
+                elif cap:
+                    _info(f"HW blackbox: {cap['report']['summary']}")
+                _hw_boot_capsule = cap
+            except Exception as exc:
+                _warn(f"HW blackbox crash check failed: {exc}")
+            try:
+                _hw_recorder.start()
+                _info(f"HW blackbox recording to {_hw_recorder.root} every "
+                      f"{_hw_recorder.interval:g}s (fsync per sample)")
+            except Exception as exc:
+                _warn(f"HW blackbox recorder failed to start: {exc}")
+
+        # Mark the session clean on any normal interpreter exit (Ctrl-C
+        # included) — without this, every bridge restart would read as an
+        # unclean session and the crash check would cry wolf.
+        import atexit as _atexit
+        _atexit.register(_hw_recorder.stop)
+        # SIGTERM's default handler kills the process WITHOUT running atexit,
+        # and SIGTERM is exactly how process managers and the GUI stop a
+        # bridge — an intentional stop that must not read as a crash. Route
+        # it through SystemExit so the atexit hook (and every other cleanup)
+        # runs. SIGKILL still can't be caught; a kill -9 is reported on the
+        # next start as "recorder stopped, machine did not reboot" — honest,
+        # and deliberately not a capsule.
+        import signal as _signal
+        try:
+            _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
+        except (ValueError, OSError):
+            pass                          # non-main thread / exotic platform
+        _t.Thread(target=_hw_boot_sequence, daemon=True,
+                  name="av-hw-boot").start()
 
     # Start the auto-capture engine — it watches for the program and fires.
     # When --no-autocapture is set, the engine is initialised but NOT started;

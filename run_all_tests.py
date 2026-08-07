@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parent
 SUITES = [
     ("schema",        "shared/schema/test_snapshot_schema.py",        False),
     ("diagnostics",   "python_backend/modules/test_diagnostics.py",   False),
+    # The machine-wide hardware flight recorder: sensor parsers, the crash
+    # verdict rulebook, and the fsync'd recorder/capsule lifecycle.
+    ("hw_blackbox",   "python_backend/modules/test_hw_blackbox.py",   False),
     ("log_adapters",  "python_backend/connectors/test_log_adapters.py", False),
     ("adapters_batch1", "python_backend/connectors/test_adapters_batch1.py", False),
     ("adapters_batch2", "python_backend/connectors/test_adapters_batch2.py", False),

@@ -8,7 +8,7 @@
 > emit *less* text than an ordinary debug log while carrying *more* actionable
 > signal per token.
 
-This is **AgentVision v5** (see `VERSION` → `5.0`). This document is the
+This is **AgentVision v5** (see `VERSION` → `5.1`). This document is the
 definitive explanation of what the project is, what problem it solves, and how
 its two hardest parts work: **the screenshot engine** and the **screenshot↔log
 time-alignment** that is the core of its value. Every number and name below is
@@ -559,7 +559,7 @@ AgentVision is a **three-layer bridge**:
 │  LAYER 3 — Claude (the AI assistant)                                  │
 │    reads JSON frames + normalized events, calls av_* tools            │
 └───────────────────────────▲──────────────────────────────────────────┘
-                            │  MCP (stdio)  — 90 av_* tools
+                            │  MCP (stdio)  — 94 av_* tools
 ┌───────────────────────────┴──────────────────────────────────────────┐
 │  LAYER 2 — MCP server  (python_backend/api/claude_mcp.py)             │
 │    FastMCP("agentvision"); proxies HTTP to the running bridge         │
@@ -596,7 +596,7 @@ the target machine*: capture is non-blank, window enumeration works, OS input
 hooks actually fire, and the daemon is healthy — each check reported as
 `ok: true | false | null` (null = not applicable on this OS).
 
-**90 MCP tools** in 19 groups. 49 of them, grouped:
+**94 MCP tools** in 20 groups. 49 of them, grouped:
 
 - **Orientation / triage:** `av_digest`, `av_overview`, `av_status`,
   `av_selftest`

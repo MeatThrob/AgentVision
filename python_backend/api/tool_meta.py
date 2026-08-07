@@ -2,7 +2,7 @@
 
 Why this exists
 ---------------
-AgentVision has ~90 tools. On a first bridge the agent must decide which of them
+AgentVision has ~94 tools. On a first bridge the agent must decide which of them
 are worth anything for THIS program, and a bare tool name does not support that
 decision: `av_ui_tree` is indispensable on a Tk app and completely useless on a
 headless C binary, but nothing in the name says so.

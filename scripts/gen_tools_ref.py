@@ -34,13 +34,15 @@ GROUP_BLURB = {
  "profiles": "Which program AgentVision is pointed at.",
  "health": "Is AgentVision itself working?",
  "program": "Target-process stats and cropping.",
+ "machine_blackbox": "The MACHINE's flight recorder — full-PC crashes (thermal/PSU/CPU), which no per-program tool survives.",
  "bookmarks": "Saved moments and frame annotations.",
  "orient": "Quick situational awareness.",
  "wrap_up": "Summarise the session.",
 }
 ORDER = ["start","bridge_setup","orient","raw_logs","diagnose","cheap_visual_path",
          "flight_recorder","investigate","frames","ui_tree","logs","capture",
-         "source","retention","health","program","profiles","bookmarks","wrap_up"]
+         "source","retention","health","program","machine_blackbox","profiles",
+         "bookmarks","wrap_up"]
 
 L = ["# AgentVision MCP tool reference",
      "",

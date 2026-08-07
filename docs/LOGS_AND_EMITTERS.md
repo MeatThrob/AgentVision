@@ -726,7 +726,7 @@ Steps:
 | `python_backend/connectors/log_adapters.py` | The 658-adapter registry and the detector. |
 | `python_backend/api/bridge_server.py` | Routes: `/start_here`, `/bridge/status`, `/bridge/catalog`, `/bridge/commit`, `/bridge/report`, `/capture/start`, `/log/raw`, `/log/normalized`. |
 | `python_backend/api/claude_mcp.py` | The MCP tools and the server instructions. |
-| `python_backend/api/tool_meta.json` | Per-tool metadata: what it returns, `needs`, cost. 90 tools. |
+| `python_backend/api/tool_meta.json` | Per-tool metadata: what it returns, `needs`, cost. 94 tools. |
 | `docs/MCP_TOOLS_REFERENCE.md` | **Generated** from `tool_meta.json` by `scripts/gen_tools_ref.py`. Never hand-edit it. |
 | `docs/MCP_TOOL_AUDIT.md` | 77 known tool defects, 12 of them Class-A. Check it before trusting a tool's output. |
 

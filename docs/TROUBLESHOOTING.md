@@ -722,7 +722,7 @@ files.
 **Symptom.** You followed a tool's documented behaviour and got something else.
 
 **Cause.** Docstrings were written from intent; several were measurably wrong
-about their own behaviour. This was audited: **78 of 90 tools** have a recorded
+about their own behaviour. This was audited: **78 of 94 tools** have a recorded
 defect or caveat, and **12** actively misled their caller. All 12 of those were
 fixed on 2026-07-30 — each with a named test — but the ordering below still holds,
 because it is what to do when the next one turns up.
