@@ -69,6 +69,13 @@ _CMD_TIMEOUT = 3.0
 # Options → Remote Web Server → Run inside LHM. 8085 is its default port.
 LHM_URL = os.environ.get("AGENTVISION_LHM_URL", "http://127.0.0.1:8085/data.json")
 
+# ── Linux sysfs roots (overridable) ───────────────────────────────────────────
+# The kernel exposes these at fixed paths, but making them overridable lets a
+# container/unusual mount relocate them and — just as importantly — lets the
+# port test drive the real Linux dispatch path against a fake tree on any OS.
+HWMON_ROOT    = os.environ.get("AGENTVISION_HWMON_ROOT", "/sys/class/hwmon")
+POWERCAP_ROOT = os.environ.get("AGENTVISION_POWERCAP_ROOT", "/sys/class/powercap")
+
 
 def _run(argv: list[str], timeout: float = _CMD_TIMEOUT) -> str:
     """Run a helper and return stdout, '' on any failure. Never raises."""
@@ -297,7 +304,7 @@ def _read_rapl_power() -> dict:
     """Linux CPU package power from /sys/class/powercap/intel-rapl (works on
     AMD too — the kernel driver reuses the interface)."""
     out: dict = {}
-    base = Path("/sys/class/powercap")
+    base = Path(POWERCAP_ROOT)
     try:
         domains = sorted(base.glob("intel-rapl:[0-9]*"))
     except Exception:
@@ -417,7 +424,7 @@ def read_sample() -> dict:
     # ── Per-OS enrichment ────────────────────────────────────────────────────
     try:
         if IS_LINUX:
-            hw = parse_hwmon_tree("/sys/class/hwmon")
+            hw = parse_hwmon_tree(HWMON_ROOT)
             if hw["volts"]:
                 sample.setdefault("volts", {}).update(hw["volts"])
             if hw["power"]:

@@ -100,3 +100,37 @@ your program in real time. Claude should call `av_status` first, then
   windowed/borderless mode for those. Everything else works out of the box.
 - **Command-line use:** `py -3 -m python_backend.cli status` (also `attach`,
   `run`, `daemon start|stop|status`, `install`).
+
+---
+
+## Diagnosing a PC that crashes / reboots / powers off on its own
+
+This is a separate tool from the debugger above, and it does **not** need the
+MCP server, a project, or screen capture — only `psutil`. It records
+machine-wide hardware telemetry (temps, fan RPM, voltage rails, watts, CPU
+load) to a crash-proof log and, after the machine comes back, tells you whether
+the last crash looks like **overheating**, a **failing power supply**, a **CPU
+machine-check**, a **driver bluescreen**, or **RAM** — with the evidence and
+what to try. Full guide: [`docs/HARDWARE_BLACKBOX.md`](docs/HARDWARE_BLACKBOX.md).
+
+Quick start on the machine that crashes:
+
+1. `py -3 -m pip install psutil`
+2. **Recommended:** install [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+   and turn on *Options → Remote Web Server → Run*. Windows exposes almost no
+   sensors on its own; this is what gives the recorder temperatures, fan RPM
+   and **voltage rails** (without them it can't tell a thermal shutdown from a
+   PSU dropout). Run it as administrator so it can read every sensor.
+3. Record from now on (leave it running; it survives a hard power cut because
+   it fsyncs every sample):
+   ```bat
+   py -3 -m python_backend.modules.hw_blackbox --run
+   ```
+   To have it start automatically at logon, see the `schtasks` recipe in the
+   guide.
+4. After the next crash, read the verdict:
+   ```bat
+   py -3 -m python_backend.modules.hw_blackbox --report
+   ```
+   `--inventory` shows what your machine's sensors can and cannot report before
+   you rely on it.

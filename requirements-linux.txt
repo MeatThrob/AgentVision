@@ -39,6 +39,19 @@ mss>=9.0.0            # X11 screen/region capture (NOT used on Wayland —
 python-xlib>=0.33     # X11 window enumeration (EWMH) + geometry + active win
 evdev>=1.6.0          # input daemon backend (/dev/input/event*)
 
+# ── Hardware black box (diagnose full-PC crashes) ──────────────────────
+# The machine-wide crash recorder (docs/HARDWARE_BLACKBOX.md) needs only
+# psutil (above). Linux is the richest platform for it: hwmon exposes
+# temperatures, fan RPM and VOLTAGE RAILS, and RAPL exposes CPU package
+# watts — no pip package, but run lm_sensors' `sensors-detect` once so the
+# motherboard chip is exposed:
+#     Arch/Artix:    pacman -S lm_sensors  &&  sudo sensors-detect
+#     Debian/Ubuntu: apt install lm-sensors &&  sudo sensors-detect
+# Optional: rasdaemon (machine-check persistence) and, for AMD/Intel GPUs,
+# the sensors already appear via hwmon; nvidia-smi covers NVIDIA cards.
+# The post-mortem reads the previous boot's journal, so a persistent
+# systemd journal (Storage=persistent) makes crash diagnosis sharper.
+
 # ── Optional: only needed if you also expose AgentVision to Claude as MCP tools
 # mcp>=2.0.0,<3
 

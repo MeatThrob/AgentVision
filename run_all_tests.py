@@ -26,6 +26,10 @@ SUITES = [
     # The machine-wide hardware flight recorder: sensor parsers, the crash
     # verdict rulebook, and the fsync'd recorder/capsule lifecycle.
     ("hw_blackbox",   "python_backend/modules/test_hw_blackbox.py",   False),
+    # The OS-dispatch layer of the same subsystem — Windows/Linux sensor +
+    # post-mortem branches, forced to run with injected boundaries so a port
+    # bug is caught on any OS (plus a live HTTP LibreHardwareMonitor read).
+    ("hw_ports",      "python_backend/modules/test_hw_ports.py",      False),
     ("log_adapters",  "python_backend/connectors/test_log_adapters.py", False),
     ("adapters_batch1", "python_backend/connectors/test_adapters_batch1.py", False),
     ("adapters_batch2", "python_backend/connectors/test_adapters_batch2.py", False),

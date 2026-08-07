@@ -14,6 +14,20 @@ pytest-json-report>=1.5.0
 mss>=9.0.0            # fast screen/region capture (replaces macOS `screencapture`)
 pywin32>=306          # window enumeration + foreground window (replaces Quartz/AppleScript)
 
+# ── Hardware black box (diagnose full-PC crashes) ──────────────────────
+# The machine-wide crash recorder (docs/HARDWARE_BLACKBOX.md) needs only
+# psutil (above) — it works with nothing else installed. But on Windows the
+# OS exposes almost no useful sensors on its own, so to get CPU/GPU/VRM
+# temperatures, fan RPM, and VOLTAGE RAILS (the signals that tell a thermal
+# shutdown apart from a failing PSU), install the free, open-source
+# LibreHardwareMonitor and enable Options -> Remote Web Server -> Run:
+#     https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+# The recorder reads its data.json (port 8085) automatically; no pip package.
+# nvidia-smi (bundled with the NVIDIA driver, already on PATH) adds GPU
+# temp/power when present. Neither is required — without them the recorder
+# still logs CPU load + RAM and reads Windows' own crash post-mortem
+# (Kernel-Power 41 / WHEA / minidumps).
+
 # ── Optional: only needed if you also expose AgentVision to Claude as MCP tools
 # mcp>=2.0.0,<3
 
