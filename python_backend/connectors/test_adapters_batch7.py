@@ -196,7 +196,7 @@ INLINE = [
      "JobState=FAILED ExitCode=1:0"),
     # kea lease DATA row (catalog sample is the header)
     ("kea_leases_csv",
-     "192.168.1.100,aa:bb:cc:dd:ee:ff,01:aa:bb:cc:dd:ee:ff,3600,1626778872,"
+     "192.168.1.50,aa:bb:cc:dd:ee:ff,01:aa:bb:cc:dd:ee:ff,3600,1626778872,"
      "1,0,0,laptop,0,,0"),
     # HL7 MLLP frame with RAW control bytes (catalog carries the escape text)
     ("hl7v2",

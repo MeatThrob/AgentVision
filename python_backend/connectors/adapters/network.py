@@ -993,7 +993,7 @@ class StunnelAdapter(LogAdapter):
 
 # ── Kea memfile lease database (kea-leases4.csv / kea-leases6.csv) ────────────
 #   address,hwaddr,client_id,valid_lft,expire,subnet_id,fqdn_fwd,fqdn_rev,hostname,…
-#   192.168.1.100,aa:bb:cc:dd:ee:ff,01:aa:…,3600,1626778872,1,0,0,laptop,0,,0
+#   192.168.1.50,aa:bb:cc:dd:ee:ff,01:aa:…,3600,1626778872,1,0,0,laptop,0,,0
 class KeaLeasesCsvAdapter(LogAdapter):
     name = "kea_leases_csv"
     language = "any"

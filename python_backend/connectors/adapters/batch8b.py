@@ -149,7 +149,7 @@ class SyslogNgInternalAdapter(LogAdapter):
 
 
 # ── systemd-networkd DHCPv4/v6 client messages ────────────────────────────────
-#   systemd-networkd[321]: eth0: DHCPv4 address 192.168.1.100/24 via 192.168.1.1
+#   systemd-networkd[321]: eth0: DHCPv4 address 192.168.1.50/24 via 192.168.1.1
 class SystemdNetworkdAdapter(RxAdapter):
     name = "systemd_networkd"
     language = "any"
